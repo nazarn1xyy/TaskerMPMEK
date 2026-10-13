@@ -371,7 +371,8 @@ ol {
 
 .popover {
   position: fixed;
-  z-index: 70;
+  /* above the mobile sidebar (90) and its shade, below dialogs (100) */
+  z-index: 96;
   min-width: 210px;
   max-height: min(70vh, 560px);
   overflow-y: auto;
