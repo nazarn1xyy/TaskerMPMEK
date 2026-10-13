@@ -1,0 +1,5 @@
+node_modules/
+audio/*.mp3
+out/*
+!out/mpmek-loop.mp4
+!out/beats-sheet.png

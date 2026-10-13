@@ -1,0 +1,12 @@
+{
+  "name": "mpmek-promo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "beats": "node render.mjs beats out/beats",
+    "full": "node render.mjs full out/frames 6"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

@@ -1,0 +1,572 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>МПМЕК — огляд сайту</title>
+<style>
+@font-face { font-family: Geist; src: url(fonts/Geist-Variable.woff2) format("woff2"); font-weight: 100 900; }
+:root { --blue: #2563EB; --ink: #0A0A0A; --gray: #71717A; --line: #E4E4E7; --soft: #F4F4F5; --canvas: #ECE9E4; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1440px; height: 1440px; overflow: hidden; background: var(--canvas); }
+body { font-family: Geist, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; font-feature-settings: "kern"; }
+#stage { position: absolute; inset: 0; background: var(--canvas); overflow: hidden; }
+#cam { position: absolute; left: 720px; top: 720px; width: 0; height: 0; transform-origin: 0 0; }
+#shape { position: absolute; overflow: hidden; }
+#c { position: absolute; width: 0; height: 0; }
+.abs { position: absolute; }
+.layer { position: absolute; display: none; }
+.row { display: flex; align-items: center; }
+.ic { display: block; flex: none; }
+#cursor { position: absolute; left: 0; top: 0; width: 40px; height: 56px; transform-origin: 0 0; }
+.sem-b { font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="cam">
+    <div id="shape">
+      <div id="c">
+        <!-- persistent pieces that live inside the one shape -->
+        <div id="track" class="abs"><div id="fill" class="abs"></div></div>
+        <div id="knob" class="abs"></div>
+        <div id="layers"></div>
+        <div id="badge" class="abs"><svg id="badgeIcon" class="abs" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"></svg></div>
+        <div id="tip" class="abs"></div>
+      </div>
+    </div>
+  </div>
+  <svg id="cursor" viewBox="-3 -3 30 42"><path d="M0 0 L0 30.5 L7.6 23.6 L12.6 34.6 L17.6 32.4 L12.7 21.6 L22.6 21.6 Z" fill="#0A0A0A" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/></svg>
+</div>
+<script>
+'use strict';
+// ───────────────────────── time, springs, tracks ─────────────────────────
+const T = 14, BEAT = 0.5;
+const mod = (t, m = T) => ((t % m) + m) % m;
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+
+// closed-form step response of a damped spring (0 → 1). resp = period in s, z = damping ratio
+function S(t, resp = 0.42, z = 0.86) {
+  if (t <= 0) return 0;
+  const w = 2 * Math.PI / resp;
+  if (z < 1) {
+    const wd = w * Math.sqrt(1 - z * z);
+    return 1 - Math.exp(-z * w * t) * (Math.cos(wd * t) + (z * w / wd) * Math.sin(wd * t));
+  }
+  return 1 - Math.exp(-w * t) * (1 + w * t);
+}
+// A value that changes target many times = sum of one spring per change.
+// Periodic: the previous cycle's tail is included, so f(0) === f(T) and velocities match.
+function track(keys, def = {}) {
+  const ks = keys.slice().sort((a, b) => a.t - b.t);
+  const vLast = ks[ks.length - 1].v;
+  const ds = ks.map((k, i) => ({ t: k.t, d: k.v - (i ? ks[i - 1].v : vLast),
+    resp: k.resp ?? def.resp ?? 0.42, z: k.z ?? def.z ?? 0.86 })).filter(k => k.d !== 0);
+  return t => {
+    t = mod(t);
+    let v = vLast;
+    for (const k of ds) v += k.d * (S(t - k.t + T, k.resp, k.z) + S(t - k.t, k.resp, k.z));
+    return v;
+  };
+}
+// one-shot sequence (no wrap): v0 then a spring per key
+function seq(v0, keys) {
+  const ds = keys.map((k, i) => ({ t: k.t, d: k.v - (i ? keys[i - 1].v : v0), resp: k.resp, z: k.z ?? 0.92 }));
+  return t => { let v = v0; for (const k of ds) v += k.d * S(t - k.t, k.resp, k.z); return v; };
+}
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+function colorTrack(keys, def) {
+  const ch = [0, 1, 2].map(c => track(keys.map(k => ({ ...k, v: hex(k.v)[c] })), def));
+  return t => `rgb(${ch.map(f => Math.round(clamp(f(t), 0, 255))).join(',')})`;
+}
+// enter/exit envelope of an interval [a, b) on the loop
+function env(t, a, b, o = {}) {
+  const din = o.din ?? 0.035, rin = o.rin ?? 0.26, rout = o.rout ?? 0.14;
+  let best = { op: 0, en: 0, ex: 1 };
+  for (const k of [-1, 0, 1]) {
+    const en = S(t - a - din - k * T, rin, 1), ex = S(t - b - k * T, rout, 1);
+    const op = en * (1 - ex);
+    if (op > best.op || (best.op === 0 && en > 0 && ex < 1)) best = { op, en, ex };
+  }
+  return best;
+}
+// a click: smooth press pulse centred on the beat
+const PRESS = [];
+function press(t, list = PRESS, w = 0.055) {
+  let p = 0;
+  for (const c of list) { const d = Math.min(Math.abs(mod(t - c)), Math.abs(mod(c - t))); p = Math.max(p, Math.exp(-((d / w) ** 2))); }
+  return p;
+}
+// smooth monotone cubic Hermite for the drag path
+function hermite(t, pts) {
+  if (t <= pts[0][0]) return pts[0][1];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [t0, x0, v0] = pts[i], [t1, x1, v1] = pts[i + 1];
+    if (t <= t1) {
+      const h = t1 - t0, u = (t - t0) / h, u2 = u * u, u3 = u2 * u;
+      return (2 * u3 - 3 * u2 + 1) * x0 + (u3 - 2 * u2 + u) * h * v0 + (-2 * u3 + 3 * u2) * x1 + (u3 - u2) * h * v1;
+    }
+  }
+  return pts[pts.length - 1][1];
+}
+const rubber = (x, d = 120, c = 0.55) => (1 - 1 / (x * c / d + 1)) * d;
+
+// ───────────────────────── palette & icons (Lucide, one stroke) ─────────────────────────
+const BLUE = '#2563EB', INK = '#0A0A0A', WHITE = '#FFFFFF', GRAY = '#71717A', SOFT = '#F4F4F5', LINE = '#E4E4E7';
+const LUCIDE = {
+  'arrow-right': '<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  moon: '<path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  'layout-grid': '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>',
+  calendar: '<path d="M8 2v3"/><path d="M16 2v3"/><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/>',
+  'book-open': '<path d="M12 5v16"/><path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z"/>',
+  'graduation-cap': '<path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/>',
+  search: '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+  house: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  newspaper: '<path d="M15 18h-5"/><path d="M18 14h-8"/><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-4 0v-9a2 2 0 0 1 2-2h2"/><rect width="8" height="4" x="10" y="6" rx="1"/>',
+  'file-text': '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  'map-pin': '<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
+  eye: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+  command: '<path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+};
+const STROKE = 2.2; // rendered stroke width in world px, identical for every icon
+const icon = (name, size, color, extra = '') =>
+  `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="${(STROKE * 24 / size).toFixed(3)}" stroke-linecap="round" stroke-linejoin="round" ${extra}>${LUCIDE[name]}</svg>`;
+
+// ───────────────────────── real content (ribbletech.online, student test account) ─────────────────────────
+const DAYS = ['Понеділок', 'Вівторок', 'Середа', 'Четвер', 'Пʼятниця'];
+const PAIRS = [['1-ША ПАРА', '08:30 - 09:50'], ['2-ГА ПАРА', '10:00 - 11:20'], ['3-ТЯ ПАРА', '11:50 - 13:10'], ['4-ТА ПАРА', '13:20 - 14:40']];
+const L = (n, k, a) => ({ n, k, a });
+const WEEK = [
+  [L('Кібербезпека', 'Лекція', 'навчальний-28'), L('Основи програмної інженерії', 'Лабораторна', 'навчальний-28'), L("Комп'ютерна схемотехніка", 'Лабораторна', 'навчальний-28'), L('Іноземна мова', 'Лекція', 'навчальний-75')],
+  [L('Вища математика', 'Лекція', 'навчальний-52'), L('Теорія електричних та магнітних кіл', 'Лекція', 'навчальний-48'), L('Алгоритми і методи обчислень', 'Лекція', 'навчальний-42'), L('Теорія електричних та магнітних кіл', 'Лекція', 'навчальний-48')],
+  [null, L('Основи програмної інженерії', 'Лабораторна', 'навчальний-28'), L('Фізичне виховання', 'Практична', 'навчальний-с'), L('Виховна година', 'Лекція', 'навчальний-10')],
+  [L('Алгоритми і методи обчислень', 'Лекція', 'навчальний-42'), L('Кібербезпека', 'Лекція', 'навчальний-28'), L("Комп'ютерна схемотехніка", 'Лабораторна', 'навчальний-28'), L('Програмування', 'Лабораторна', 'навчальний-66')],
+  [null, L('Програмування', 'Лабораторна', 'навчальний-66'), L('Вища математика', 'Лекція', 'навчальний-54'), null],
+];
+const rowTop = (i, t) => i === 1 ? lerp(105 + 84, 105, S(t - 11.0, 0.4, 0.86)) : 105 + i * 84;
+const SEARCH = [
+  ['house', 'Головна', 'Головна сторінка сайту'], ['newspaper', 'Новини', 'Останні новини коледжу'],
+  ['calendar', 'Події', 'Заходи та конференції'], ['file-text', 'Документи', 'Офіційні документи закладу'],
+  ['info', 'Про коледж', 'Історія, місія та цінності'], ['map-pin', 'Контакти', 'Адреса, телефон, email'],
+];
+
+// ───────────────────────── layers (each state's content) ─────────────────────────
+const $ = s => document.querySelector(s);
+const layersEl = $('#layers');
+const LAYERS = [];
+function layer(id, a, b, w, h, html, o = {}) {
+  const el = document.createElement('div');
+  el.className = 'layer'; el.id = id;
+  el.style.width = w + 'px'; el.style.height = h + 'px';
+  el.style.left = -w / 2 + 'px'; el.style.top = -h / 2 + 'px';
+  el.innerHTML = html;
+  layersEl.appendChild(el);
+  const L = { id, a, b, w, h, el, anchor: o.anchor || 'center', dy: o.dy || 0, o };
+  LAYERS.push(L);
+  return L;
+}
+const txt = (x, y, s, style = '') => `<div class="abs" style="left:${x}px;top:${y}px;${style}">${s}</div>`;
+
+// geometry of every state (world px, shape centred on the origin)
+const G = {
+  login: { w: 320, h: 96, r: 48 }, field: { w: 560, h: 104, r: 30 }, card: { w: 600, h: 330, r: 36 },
+  loader: { w: 128, h: 128, r: 64 }, island: { w: 680, h: 104, r: 52 }, course: { w: 680, h: 440, r: 40 },
+  sem: { w: 880, h: 350, r: 40 }, toggle: { w: 660, h: 128, r: 64 }, tabs: { w: 920, h: 108, r: 54 },
+  tt: { w: 1240, h: 890, r: 44 }, pill: { w: 440, h: 100, r: 50 }, pal: { w: 780, h: 674, r: 32 },
+  pal1: { w: 780, h: 254, r: 32 }, toast: { w: 640, h: 128, r: 34 }, toast2: { w: 640, h: 176, r: 38 },
+};
+
+// 0 · «Увійти» (from 13.0 to the loop point)
+layer('lLogin', 13.0, 14.0, 320, 96, `<div class="row" style="height:96px;justify-content:center;color:#fff;font-size:32px;font-weight:600;letter-spacing:-.01em">Увійти</div>`);
+// 1 · the button becomes the «Логін» field; student is typed
+layer('lField', 0.0, 1.0, 560, 104, `
+  <div id="fPh" class="abs" style="left:36px;top:33px;font-size:30px;color:#A1A1AA">Логін</div>
+  <div class="abs row" style="left:36px;top:33px;font-size:30px;font-weight:500;height:38px"><span id="fTx"></span><span id="fCaret" style="display:inline-block;width:3px;height:34px;background:${BLUE};margin-left:2px;border-radius:2px"></span></div>`);
+// 2 · the real login card: Логін / Пароль / Увійти
+layer('lCard', 1.0, 1.5, 600, 330, `
+  <div class="abs" style="left:36px;top:32px;width:528px;height:76px;border-radius:18px;background:${SOFT}"></div>
+  ${txt(60, 52, 'student', 'font-size:26px;font-weight:500')}
+  <div class="abs" style="left:36px;top:122px;width:528px;height:76px;border-radius:18px;background:${SOFT}"></div>
+  <div id="cPh" class="abs" style="left:60px;top:142px;font-size:26px;color:#A1A1AA">Пароль</div>
+  <div id="cDots" class="abs row" style="left:60px;top:122px;height:76px;gap:8px"></div>
+  <div class="abs" style="left:502px;top:146px">${icon('eye', 28, '#71717A')}</div>
+  <div id="cBtn" class="abs row" style="left:36px;top:218px;width:528px;height:76px;border-radius:18px;background:${BLUE};justify-content:center;color:#fff;font-size:26px;font-weight:600">Увійти</div>`);
+// 3 · «Вхід...» (the button's real pending label)
+layer('lSignin', 1.5, 2.0, 320, 96, `<div class="row" style="height:96px;justify-content:center;color:#fff;font-size:32px;font-weight:600">Вхід...</div>`);
+// 4 · loader
+layer('lLoader', 2.0, 2.5, 128, 128, `<svg id="spin" class="abs" style="left:24px;top:24px" width="80" height="80" viewBox="0 0 80 80"><circle cx="40" cy="40" r="31" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="7"/><circle id="spinArc" cx="40" cy="40" r="31" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-dasharray="58 200"/></svg>`, { din: 0.03 });
+// 5 · check: signed in
+layer('lCheck', 2.5, 3.0, 128, 128, `<svg class="abs" style="left:28px;top:28px" width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="${(3.2 * 24 / 72).toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"><path id="chk" d="M20 6 9 17l-5-5" pathLength="1" stroke-dasharray="1 1"/></svg>`, { din: 0.02 });
+// 6 · dynamic island: МПМЕК + welcome line
+layer('lIsland', 3.0, 3.5, 680, 104, `
+  ${txt(44, 34, 'МПМЕК', 'font-size:32px;font-weight:700;color:#fff;letter-spacing:-.01em')}
+  <div class="abs" style="left:212px;top:28px;width:1.5px;height:48px;background:#3F3F46"></div>
+  ${txt(244, 20, 'Вітаємо, Студент', 'font-size:27px;font-weight:600;color:#fff')}
+  ${txt(244, 58, 'Група КСМ-24-1', 'font-size:19px;color:#A1A1AA')}`);
+// 7 · course card (real course of group КСМ-24-1); its round button is the persistent badge
+layer('lCourse', 3.5, 4.0, 680, 440, `
+  ${txt(40, 44, 'НАВЧАЛЬНИЙ КУРС', 'font-size:15px;font-weight:600;letter-spacing:.09em;color:#71717A')}
+  <div class="abs row" style="right:40px;top:36px;height:36px;padding:0 16px;border:1.5px solid ${LINE};border-radius:18px;font-size:16px;font-weight:500">Активний</div>
+  ${txt(40, 104, 'Алгоритми і методи обчислень', 'width:600px;font-size:48px;font-weight:700;line-height:1.08;letter-spacing:-.02em')}
+  ${txt(40, 228, 'Навчальний курс з дисципліни Алгоритми і методи обчислень', 'width:560px;font-size:20px;line-height:1.4;color:#71717A')}
+  ${txt(134, 344, 'Перейти до курсу', 'font-size:23px;font-weight:600')}`);
+// 8 · «Графік навчального процесу» with the semester progress bar
+layer('lSem', 4.0, 6.0, 880, 350, `
+  ${txt(128, 32, 'Графік навчального процесу', 'font-size:32px;font-weight:700;letter-spacing:-.015em')}
+  <div class="abs" style="left:128px;top:78px;font-size:18px;color:#71717A">I Семестр (Осінньо-зимовий) • <span id="sWeek">7-й навчальний тиждень (Чисельник)</span></div>
+  ${txt(80, 152, 'Прогрес семестру', 'font-size:22px;font-weight:500')}
+  <div id="sPct" class="abs" style="right:80px;top:136px;font-size:44px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums">37%</div>
+  <div id="sTick" class="abs" style="left:${80 + 0.913 * 720 - 1}px;top:201px;width:2px;height:28px;border-radius:1px;background:#A1A1AA"></div>
+  ${txt(80, 258, '01.09.2026', 'font-size:18px;color:#71717A;font-variant-numeric:tabular-nums')}
+  <div id="sDl" class="abs row" style="right:80px;top:250px;gap:10px;font-size:18px;color:#71717A"><span style="padding:5px 10px;border-radius:8px;background:${SOFT};font-weight:600;font-size:16px">Дедлайн</span><span style="font-variant-numeric:tabular-nums">15.12.2026</span></div>`);
+// 9 · toggle: «Увімкнути темну тему» → (dark) «Увімкнути світлу тему»
+layer('lTogOff', 6.0, 6.5, 660, 128, txt(116, 47, 'Увімкнути темну тему', 'font-size:28px;font-weight:600;color:#0A0A0A'));
+layer('lTogOn', 6.5, 7.0, 660, 128, txt(116, 47, 'Увімкнути світлу тему', 'font-size:28px;font-weight:600;color:#fff'), { din: 0.08 });
+// 10 · the knob becomes the indicator over the student cabinet's real menu
+const TABS = [['layout-grid', 'Головна'], ['calendar', 'Розклад'], ['book-open', 'Мої предмети'], ['graduation-cap', 'Оцінки']];
+layer('lTabs', 7.0, 8.5, 920, 108, `<div id="tabRow" class="row" style="position:absolute;left:14px;top:14px;height:80px;gap:6px">${
+  TABS.map(([i, n]) => `<div class="tab row" style="height:80px;padding:0 30px;gap:12px;color:#fff;font-size:25px;font-weight:550">${icon(i, 26, '#fff')}<span>${n}</span></div>`).join('')}</div>`);
+// 11 · Розклад: the real week of group КСМ-24-1, drawn cell by cell
+const TT = { padX: 40, top: 40, headH: 112, rowLab: 150, gap: 12, dayH: 52, cellH: 150 };
+TT.colW = (G.tt.w - 2 * TT.padX - TT.rowLab - 4 * TT.gap) / 5;
+TT.x0 = TT.padX + TT.rowLab; TT.y0 = TT.top + TT.headH + TT.dayH + 10;
+const cellX = c => TT.x0 + c * (TT.colW + TT.gap), cellY = r => TT.y0 + r * (TT.cellH + TT.gap);
+layer('lTT', 8.5, 10.0, G.tt.w, G.tt.h, `
+  ${txt(TT.padX, TT.top + 4, 'Розклад', 'font-size:46px;font-weight:700;letter-spacing:-.02em;color:#fff')}
+  <div class="abs row" style="right:${TT.padX}px;top:${TT.top + 10}px;gap:10px">${['Група: КСМ-24-1', 'Поточний (Чисельник)', 'Тиждень'].map(s =>
+    `<div class="row" style="height:44px;padding:0 18px;border-radius:22px;background:#1C1C1E;color:#E4E4E7;font-size:18px;font-weight:500">${s}</div>`).join('')}</div>
+  ${DAYS.map((d, c) => `<div class="abs row dayH" style="left:${cellX(c)}px;top:${TT.top + TT.headH}px;width:${TT.colW}px;height:${TT.dayH}px;justify-content:center;color:#fff;font-size:20px;font-weight:600">${d}</div>`).join('')}
+  ${PAIRS.map(([p, tm], r) => `<div class="abs" style="left:${TT.padX}px;top:${cellY(r) + 22}px;width:${TT.rowLab - 16}px">
+      <div style="font-size:14px;font-weight:600;letter-spacing:.07em;color:#A1A1AA">${p}</div>
+      <div style="margin-top:8px;font-size:17px;color:#fff;font-variant-numeric:tabular-nums">${tm}</div></div>`).join('')}
+  ${WEEK.map((col, c) => col.map((l, r) => l ? `<div class="abs cell" data-c="${c}" data-r="${r}" style="left:${cellX(c)}px;top:${cellY(r)}px;width:${TT.colW}px;height:${TT.cellH}px;border-radius:18px;background:#18181B;border:1.5px solid #27272A;padding:16px 16px 0">
+      <div style="font-size:18.5px;font-weight:600;line-height:1.22;color:#fff">${l.n}</div>
+      <div class="abs" style="left:16px;bottom:14px;font-size:14.5px;line-height:1.35;color:#A1A1AA">${l.k}<br>${l.a}</div></div>` : '').join('')).join('')}`);
+// 12 · ⌘K: the site's search button («Пошук - Cmd+K»)
+layer('lPill', 10.0, 10.5, 440, 100, `<div id="pillRow" class="row" style="position:absolute;left:0;top:0;width:440px;height:100px;justify-content:center;gap:16px">
+  ${icon('search', 32, INK)}<span style="font-size:30px;font-weight:600">Пошук</span>
+  <span id="kbd" class="row" style="height:44px;padding:0 12px;gap:4px;font-size:22px;font-weight:600;color:#3F3F46">${icon('command', 20, '#3F3F46')}K</span></div>`);
+// 13 · the command palette, real items; «Нов» filters to «Новини»
+layer('lPalIn', 10.5, 12.0, 780, 92, `
+  <div class="abs" style="left:32px;top:30px">${icon('search', 32, '#3F3F46')}</div>
+  <div id="pPh" class="abs" style="left:80px;top:28px;font-size:30px;color:#A1A1AA">Шукати сторінки, новини...</div>
+  <div class="abs row" style="left:80px;top:28px;height:36px;font-size:30px;font-weight:500"><span id="pTx"></span><span id="pCaret" style="display:inline-block;width:3px;height:34px;background:${BLUE};margin-left:2px;border-radius:2px"></span></div>
+  <div class="abs row" style="right:30px;top:28px;height:34px;padding:0 10px;border-radius:9px;background:${SOFT};font-size:15px;font-weight:600;color:#52525B">ESC</div>
+  <div class="abs" style="left:0;top:91px;width:780px;height:1.5px;background:${LINE}"></div>`, { anchor: 'top', din: 0.05 });
+SEARCH.forEach(([ic, t1, t2], i) => layer('lRow' + i, 10.5, i === 1 ? 12.0 : 11.0 + 0.025 * i, 748, 80, `
+  <div class="abs rowIc" style="left:26px;top:25px" data-ic="${ic}"></div>
+  <div class="abs rowT1" style="left:76px;top:13px;font-size:22px;font-weight:600">${t1}</div>
+  <div class="abs rowT2" style="left:76px;top:44px;font-size:17px">${t2}</div>
+  <div class="abs rowAr" style="right:24px;top:28px"></div>`, { anchor: 'top', din: 0.05 + 0.025 * i, y: t => rowTop(i, t) }));
+layer('lPalFoot', 10.5, 12.0, 780, 58, `
+  <div class="abs" style="left:0;top:0;width:780px;height:1.5px;background:${LINE}"></div>
+  <div class="abs row" style="left:0;top:1px;width:780px;height:57px;justify-content:center;gap:12px;font-size:17px;color:#71717A">
+    <span class="row" style="height:30px;padding:0 9px;border-radius:8px;background:${SOFT};font-weight:600;color:#52525B">↑↓</span><span>навігація</span>
+    <span style="width:14px"></span>
+    <span id="enterKey" class="row" style="height:30px;padding:0 9px;border-radius:8px;background:${SOFT};font-weight:600;color:#52525B">↵</span><span>відкрити</span></div>`, { anchor: 'bottom', din: 0.05 });
+// 14 · the opened result, toast-shaped: «Новини», then the real news item
+layer('lToastIc', 12.0, 13.0, 640, 176, `<div class="abs" style="left:46px;top:70px">${icon('newspaper', 36, '#fff')}</div>`, { din: 0.1 });
+layer('lToast', 12.0, 12.5, 640, 128, `
+  ${txt(130, 30, 'Новини', 'font-size:28px;font-weight:600;color:#fff')}
+  ${txt(130, 68, 'Останні новини коледжу', 'font-size:19px;color:#A1A1AA')}`);
+layer('lToast2', 12.5, 13.0, 640, 176, `
+  ${txt(130, 40, 'Новини коледжу · 28 травня', 'font-size:19px;color:#A1A1AA')}
+  ${txt(130, 78, 'Вибір зроблено !', 'font-size:40px;font-weight:700;letter-spacing:-.015em;color:#fff')}`);
+
+// ───────────────────────── timeline: states of the one shape ─────────────────────────
+const STATES = [
+  [13.0, 'login', BLUE], [0.0, 'field', WHITE], [1.0, 'card', WHITE], [1.5, 'login', BLUE],
+  [2.0, 'loader', BLUE], [3.0, 'island', INK], [3.5, 'course', WHITE], [4.0, 'sem', WHITE],
+  [6.0, 'toggle', WHITE], [6.5, 'toggle', INK], [7.0, 'tabs', INK], [8.5, 'tt', INK],
+  [10.0, 'pill', WHITE], [10.5, 'pal', WHITE], [11.0, 'pal1', WHITE], [12.0, 'toast', INK], [12.5, 'toast2', INK],
+];
+const camScale = g => Math.min(2.2, 1300 / g.w, 1240 / g.h);
+let F = {}; // all tracks, built after measuring
+
+function build() {
+  // measure real text widths for the tab bar and the ⌘K button
+  for (const L of LAYERS) { L.el.style.display = 'block'; }
+  const tabs = [...document.querySelectorAll('.tab')].map(e => ({ x: e.offsetLeft + 14, w: e.offsetWidth }));
+  G.tabs.w = Math.round(tabs[tabs.length - 1].x + tabs[tabs.length - 1].w + 14);
+  const tabsL = LAYERS.find(l => l.id === 'lTabs'); tabsL.w = G.tabs.w;
+  tabsL.el.style.width = G.tabs.w + 'px'; tabsL.el.style.left = -G.tabs.w / 2 + 'px';
+  const kbd = $('#kbd'), pr = $('#pillRow');
+  const kb = { x: kbd.offsetLeft - 220, w: kbd.offsetWidth };
+  for (const L of LAYERS) { L.el.style.display = 'none'; }
+  F.tabX = tabs.map(t => ({ l: t.x - G.tabs.w / 2, r: t.x + t.w - G.tabs.w / 2 }));
+  F.kbd = kb;
+
+  const spr = { resp: 0.42, z: 0.84 };
+  const key = (fn) => STATES.map(([t, g, col]) => ({ t, v: fn(G[g], col, g) }));
+  F.w = track(key(g => g.w), spr); F.h = track(key(g => g.h), spr); F.r = track(key(g => g.r), spr);
+  F.bg = colorTrack(key((g, c) => c), { resp: 0.2, z: 1 });
+  F.cam = track(key(g => camScale(g)), { resp: 0.6, z: 1 });
+
+  // ── semester progress (drag) ──
+  const BX0 = -360, BX1 = 360, BY = 40;           // bar in sem-card coords
+  F.BX0 = BX0; F.BX1 = BX1; F.BY = BY;
+  const KX = v => BX0 + (BX1 - BX0) * v / 100;
+  const GRAB = 4.5, REL = 5.5, X37 = KX(37);
+  const GO = 4; // cursor tip sits 4px right of the knob centre
+  const dragPts = [[GRAB, X37 + GO, 0], [5.0, BX1 + GO, 640], [5.3, BX1 + 80, 0], [REL, BX1 + 80, 0]];
+  F.dragX = t => hermite(t, dragPts);
+  const relX = F.dragX(REL);
+  F.relKnob = relX - GO;
+  F.prog = t => { // returns {v: percent, s: rubber stretch}
+    if (t < GRAB || t >= 6.2) return { v: 37, s: 0 };
+    if (t < REL) { const x = F.dragX(t) - GO; return { v: clamp((x - BX0) / (BX1 - BX0)) * 100, s: rubber(Math.max(0, x - BX1)) }; }
+    const k = S(t - REL, 0.48, 0.9);
+    return { v: lerp(100, 37, k), s: rubber(F.relKnob - BX1) * (1 - k) };
+  };
+
+  // ── knob: scrubber → toggle knob → tab indicator → today marker → ⌘K key → selection → toast badge ──
+  const tt = { l: -G.tt.w / 2, t: -G.tt.h / 2 };
+  const today = { l: tt.l + cellX(1) + 30, r: tt.l + cellX(1) + TT.colW - 30, y: tt.t + TT.top + TT.headH + TT.dayH / 2 };
+  const palRowY = (h, i) => -h / 2 + 105 + i * 84 + 40;
+  const K = [ // t, xl, xr, yc, h, r, color, op, snap
+    [3.9, X37 - 18, X37 + 18, BY, 36, 18, INK, 0, true],
+    [6.0, 204 - 26, 204 + 26, 0, 52, 26, WHITE, 1],
+    [6.5, 252 - 26, 252 + 26, 0, 52, 26, WHITE, 1],
+    [7.0, F.tabX[0].l, F.tabX[0].r, 0, 80, 40, BLUE, 1],
+    [7.5, F.tabX[2].l, F.tabX[2].r, 0, 80, 40, BLUE, 1],
+    [8.0, F.tabX[1].l, F.tabX[1].r, 0, 80, 40, BLUE, 1],
+    [8.5, today.l, today.r, today.y, 44, 22, BLUE, 1],
+    [10.0, kb.x, kb.x + kb.w, 0, 44, 12, '#EFEFF1', 1],
+    [10.5, -374, 374, palRowY(G.pal.h, 0), 80, 18, BLUE, 1],
+    [11.0, -374, 374, palRowY(G.pal1.h, 0), 80, 18, BLUE, 1],
+    [12.0, -320 + 32, -320 + 32 + 64, 0, 64, 32, BLUE, 1],
+    [13.0, -160, 160, 0, 96, 48, BLUE, 0],
+  ];
+  const fast = { resp: 0.24, z: 0.86 }, slow = { resp: 0.46, z: 0.86 };
+  const xl = [], xr = [];
+  const SNAP = { resp: 0.01, z: 1 };
+  K.forEach((k, i) => {
+    if (k[8]) { xl.push({ t: k[0], v: k[1], ...SNAP }); xr.push({ t: k[0], v: k[2], ...SNAP }); return; }
+    const p = K[(i + K.length - 1) % K.length];
+    const dir = Math.sign((k[1] + k[2]) - (p[1] + p[2]));
+    const moving = Math.abs((k[1] + k[2]) - (p[1] + p[2])) > 1 && Math.abs((k[2] - k[1]) - (p[2] - p[1])) < 140;
+    xl.push({ t: k[0], v: k[1], ...(moving ? (dir < 0 ? fast : slow) : {}) });
+    xr.push({ t: k[0], v: k[2], ...(moving ? (dir > 0 ? fast : slow) : {}) });
+  });
+  F.kxl = track(xl); F.kxr = track(xr);
+  const sn = k => k[8] ? SNAP : {};
+  F.ky = track(K.map(k => ({ t: k[0], v: k[3], ...sn(k) })));
+  F.kh = track(K.map(k => ({ t: k[0], v: k[4], ...sn(k) })));
+  F.kr = track(K.map(k => ({ t: k[0], v: k[5], ...sn(k) })));
+  F.kc = colorTrack(K.map(k => ({ t: k[0], v: k[6], ...sn(k) })), { resp: 0.3, z: 1 });
+  F.kop = track([{ t: 4.0, v: 0 }, { t: 4.06, v: 1, resp: 0.3, z: 1 }, { t: 13.12, v: 0, resp: 0.25, z: 1 }]);
+  F.X37 = X37;
+
+  // ── track: progress bar → switch track → dissolves into the tab bar ──
+  F.tl = track([{ t: 4.0, v: BX0 }, { t: 6.0, v: 228 - 56 }, { t: 7.0, v: -G.tabs.w / 2 }, { t: 7.4, v: BX0, resp: 0.01 }]);
+  F.tr = track([{ t: 4.0, v: BX1 }, { t: 6.0, v: 228 + 56 }, { t: 7.0, v: G.tabs.w / 2 }, { t: 7.4, v: BX1, resp: 0.01 }]);
+  F.th = track([{ t: 4.0, v: 12 }, { t: 6.0, v: 64 }, { t: 7.0, v: G.tabs.h }, { t: 7.4, v: 12, resp: 0.01 }]);
+  F.ty = track([{ t: 4.0, v: BY }, { t: 6.0, v: 0 }, { t: 7.4, v: BY, resp: 0.01 }]);
+  F.tc = colorTrack([{ t: 4.0, v: '#E7E5E4' }, { t: 6.0, v: '#E4E4E7' }, { t: 6.5, v: BLUE }, { t: 7.0, v: INK }, { t: 7.4, v: '#E7E5E4', resp: 0.01 }], { resp: 0.28, z: 1 });
+  F.top = track([{ t: 4.0, v: 0 }, { t: 4.06, v: 1, resp: 0.3, z: 1 }, { t: 7.0, v: 0, resp: 0.3, z: 1 }]);
+  F.fop = track([{ t: 4.0, v: 1, resp: 0.01 }, { t: 6.0, v: 0, resp: 0.18, z: 1 }]);
+
+  // ── badge: «Перейти до курсу» button → clock of «Графік навчального процесу» → theme icon ──
+  const B = [[3.4, -262, 142, 76, true], [3.5, -262, 142, 76], [4.0, -372, -175 + 52, 60], [6.0, -330 + 64, 0, 60], [7.0, -G.tabs.w / 2 + 60, 0, 30]];
+  const bsn = b => b[4] ? { resp: 0.01, z: 1 } : {};
+  F.bx = track(B.map(b => ({ t: b[0], v: b[1], ...bsn(b) }))); F.by = track(B.map(b => ({ t: b[0], v: b[2], ...bsn(b) })));
+  F.bs = track(B.map(b => ({ t: b[0], v: b[3], ...bsn(b) })));
+  F.bop = track([{ t: 3.5, v: 0 }, { t: 3.57, v: 1, resp: 0.3, z: 1 }, { t: 7.0, v: 0, resp: 0.2, z: 1 }]);
+  F.bbg = colorTrack([{ t: 3.5, v: INK }, { t: 6.5, v: WHITE }, { t: 7.4, v: INK, resp: 0.01 }], { resp: 0.28, z: 1 });
+  F.bfg = colorTrack([{ t: 3.5, v: WHITE }, { t: 6.5, v: INK }, { t: 7.4, v: WHITE, resp: 0.01 }], { resp: 0.28, z: 1 });
+  F.morph = track([{ t: 3.5, v: 0 }, { t: 4.0, v: 1, resp: 0.5, z: 0.9 }, { t: 6.0, v: 0, resp: 0.01 }]);
+
+  // ── cursor (world coords). Anchored at the drag release so the loop is one continuous function ──
+  const pal1 = G.pal1.h;
+  const tCell = { x: tt.l + cellX(1) + TT.colW * 0.62, y: tt.t + cellY(2) + TT.cellH * 0.55 };
+  F.tCell = tCell;
+  const CK = [ // t, x, y, resp
+    [5.62, 236, 10, 0.5], [6.6, (F.tabX[2].l + F.tabX[2].r) / 2 + 10, 12, 0.48], [7.6, (F.tabX[1].l + F.tabX[1].r) / 2 + 8, 12, 0.3],
+    [8.2, tCell.x, tCell.y, 0.85], [9.86, 168, 92, 0.5], [10.5, 300, 300, 0.6], [11.0, 290, 196, 0.55],
+    [12.0, 250, 108, 0.5], [13.25, 14, 12, 0.56], [14.1, 236, 98, 0.5], [15.05, 22, 98, 0.38],
+    [15.62, 220, 120, 0.5], [17.2, 134, 8, 0.4], [17.6, -248, 150, 0.42], [18.08, X37 + 4, BY + 8, 0.36],
+  ];
+  // the cursor is one sequence that starts at the drag release and ends on the grab: continuous through the loop point
+  const cx = seq(relX, CK.map(k => ({ t: k[0] - REL, v: k[1], resp: k[3] })));
+  const cy = seq(BY + 8, CK.map(k => ({ t: k[0] - REL, v: k[2], resp: k[3] })));
+  F.cursor = t => {
+    t = mod(t);
+    if (t >= GRAB && t < REL) return [F.dragX(t), BY + 8];
+    const u = mod(t - REL);
+    return [cx(u), cy(u)];
+  };
+  F.GRAB = GRAB; F.REL = REL;
+  PRESS.push(0.0, 1.5, 3.5, 4.0, 6.5, 7.5, 8.0);
+}
+
+// ───────────────────────── seek(t): every style is a pure function of t ─────────────────────────
+const el = { cam: $('#cam'), shape: $('#shape'), c: $('#c'), track: $('#track'), fill: $('#fill'), knob: $('#knob'),
+  badge: $('#badge'), bIcon: $('#badgeIcon'), tip: $('#tip'), cursor: $('#cursor') };
+const typed = (t, t0, dt, s) => s.slice(0, clamp(Math.floor((t - t0) / dt) + 1, 0, s.length) * (t >= t0 ? 1 : 0));
+const P = (a, b, k) => [lerp(a[0], b[0], k), lerp(a[1], b[1], k)];
+
+function seek(t) {
+  t = mod(t);
+  const w = F.w(t), h = F.h(t), r = F.r(t), s = F.cam(t);
+  el.cam.style.transform = `scale(${s})`;
+  const pressShape = 1 - 0.035 * press(t, [0.0, 1.5, 3.5]);
+  Object.assign(el.shape.style, { left: -w / 2 + 'px', top: -h / 2 + 'px', width: w + 'px', height: h + 'px',
+    borderRadius: Math.min(r, w / 2, h / 2) + 'px', background: F.bg(t), transform: `scale(${pressShape})`,
+    boxShadow: '0 1px 2px rgba(20,16,10,.06), 0 18px 40px -14px rgba(20,16,10,.22)' });
+  el.c.style.left = w / 2 + 'px'; el.c.style.top = h / 2 + 'px';
+
+  // content layers: own enter/exit timing, short blur on swap
+  for (const L of LAYERS) {
+    const e = env(t, L.a, L.b, L.o);
+    if (e.op < 0.003) { L.el.style.display = 'none'; continue; }
+    let y = L.dy;
+    if (L.anchor === 'top') y += -h / 2 + L.h / 2;
+    if (L.anchor === 'bottom') y += h / 2 - L.h / 2;
+    if (L.o.y) y += L.o.y(t);
+    const sc = 0.965 + 0.035 * e.en;
+    Object.assign(L.el.style, { display: 'block', opacity: e.op, filter: e.op > 0.995 ? 'none' : `blur(${((1 - e.op) * 7).toFixed(2)}px)`,
+      transform: `translate(0px, ${(y + (1 - e.en) * 12 - e.ex * 8).toFixed(2)}px) scale(${sc})` });
+  }
+
+  // typing into «Логін», password as dots
+  $('#fTx').textContent = typed(t, 0.5, 0.064, 'student');
+  $('#fPh').style.opacity = t < 0.5 ? 1 : 0;
+  const nDots = t < 1.06 ? 0 : clamp(Math.floor((t - 1.06) / 0.034) + 1, 0, 11);
+  $('#cPh').style.opacity = nDots ? 0 : 1;
+  const dots = $('#cDots');
+  if (dots.childElementCount !== 11) dots.innerHTML = '<i></i>'.repeat(11);
+  [...dots.children].forEach((d, i) => { const k = S(t - (1.06 + i * 0.034), 0.22, 0.75);
+    Object.assign(d.style, { display: 'block', width: '13px', height: '13px', borderRadius: '50%', background: INK, transform: `scale(${k})`, opacity: clamp(k * 3) }); });
+  $('#cBtn').style.transform = `scale(${1 - 0.04 * press(t, [1.5])})`;
+
+  // loader & check
+  $('#spinArc').style.transform = `rotate(${(t - 2.0) * 520 - 90}deg)`; $('#spinArc').style.transformOrigin = '40px 40px';
+  $('#chk').style.strokeDashoffset = 1 - S(t - 2.56, 0.4, 1);
+
+  // semester progress: value from the drag, week label from the real calendar (01.09–25.12, 17 тижнів)
+  const pr = F.prog(t), v = pr.v;
+  const week = clamp(Math.floor(v / 100 * 115 / 7) + 1, 1, 17);
+  $('#sWeek').textContent = `${week}-й навчальний тиждень (${week % 2 ? 'Чисельник' : 'Знаменник'})`;
+  $('#sPct').textContent = Math.round(v) + '%';
+  const dl = v >= 91.3 ? 1 : 0;
+  $('#sTick').style.background = dl ? INK : '#A1A1AA'; $('#sDl').style.color = dl ? INK : '#71717A';
+
+  // track + fill
+  const inSem = t >= 4.0 && t < 6.0;
+  const tl = F.tl(t), trr = F.tr(t) + (inSem ? pr.s : 0), th = F.th(t) * (inSem ? 1 - 0.25 * pr.s / 60 : 1), ty = F.ty(t);
+  const top = F.top(t);
+  Object.assign(el.track.style, { display: top < 0.003 ? 'none' : 'block', left: tl + 'px', top: ty - th / 2 + 'px', width: trr - tl + 'px', height: th + 'px',
+    borderRadius: th / 2 + 'px', background: F.tc(t), opacity: top });
+  const kc = inSem ? F.BX0 + (F.BX1 - F.BX0) * v / 100 + pr.s : null;
+  Object.assign(el.fill.style, { left: 0, top: 0, height: '100%', width: inSem ? Math.max(0, kc - tl) + 'px' : '0px', borderRadius: th / 2 + 'px', background: INK, opacity: F.fop(t) });
+
+  // knob (two edges on two springs → the leading edge stretches ahead)
+  let kxl = F.kxl(t), kxr = F.kxr(t), ky = F.ky(t), kh = F.kh(t), krr = F.kr(t);
+  if (inSem) { kxl = kc - 18; kxr = kc + 18; }
+  if (t >= 10.95 && t < 12.0) ky = -h / 2 + 105 + 40;
+  const kop = F.kop(t);
+  const kp = 1 - 0.06 * press(t, [6.5, 7.5, 8.0, 11.5]);
+  Object.assign(el.knob.style, { display: kop < 0.003 ? 'none' : 'block', left: kxl + 'px', top: ky - kh / 2 + 'px', width: Math.max(0, kxr - kxl) + 'px', height: kh + 'px',
+    borderRadius: Math.min(krr, kh / 2) + 'px', background: F.kc(t), opacity: kop, transform: `scale(${kp})`,
+    boxShadow: t > 5.9 && t < 7.0 ? '0 2px 6px rgba(0,0,0,.18)' : (inSem ? '0 0 0 4px #fff, 0 2px 6px rgba(0,0,0,.2)' : 'none') });
+
+  // badge with the arrow → clock morph, then moon / sun
+  const bop = F.bop(t);
+  if (bop < 0.003) el.badge.style.display = 'none';
+  else {
+    const bs = F.bs(t) * (1 - 0.06 * press(t, [4.0]));
+    Object.assign(el.badge.style, { display: 'block', left: F.bx(t) - bs / 2 + 'px', top: F.by(t) - bs / 2 + 'px', width: bs + 'px', height: bs + 'px', borderRadius: '50%', background: F.bbg(t), opacity: bop });
+    const isz = bs * 0.5, m = clamp(F.morph(t), 0, 1.04);
+    const fg = F.bfg(t), sw = (STROKE * 24 / isz).toFixed(3);
+    Object.assign(el.bIcon.style, { left: (bs - isz) / 2 + 'px', top: (bs - isz) / 2 + 'px', width: isz + 'px', height: isz + 'px' });
+    el.bIcon.setAttribute('stroke', fg); el.bIcon.setAttribute('stroke-width', sw);
+    const themeK = env(t, 6.0, 7.0, { din: 0.04 }), sunK = env(t, 6.5, 7.0, { din: 0.06 });
+    if (t >= 5.9 && t < 7.2) {
+      const moonOp = themeK.op * (1 - sunK.en), sunOp = sunK.op;
+      el.bIcon.innerHTML = `<g opacity="${(1 - themeK.en) * 1}">${clockMorph(1)}</g><g opacity="${moonOp}" transform="rotate(${(1 - themeK.en) * -40} 12 12)">${LUCIDE.moon}</g><g opacity="${sunOp}" transform="rotate(${(1 - sunK.en) * 60} 12 12)">${LUCIDE.sun}</g>`;
+    } else el.bIcon.innerHTML = clockMorph(m);
+  }
+
+  // timetable cells draw themselves, today highlighted, hover tooltip
+  if (t > 8.4 && t < 10.3) {
+    document.querySelectorAll('.cell').forEach(cel => {
+      const c = +cel.dataset.c, r = +cel.dataset.r, d = 9.0 + c * 0.055 + r * 0.03 - 0.03;
+      const k = S(t - d, 0.36, 0.84), hov = c === 1 && r === 2 ? S(t - 9.5, 0.2, 1) : 0;
+      Object.assign(cel.style, { opacity: clamp(k * 1.4), transform: `translateY(${(1 - k) * 18}px) scale(${0.92 + 0.08 * k})`,
+        filter: k > 0.99 ? 'none' : `blur(${(1 - clamp(k)) * 6}px)`, background: hov ? `rgb(${lerp(24, 39, hov)},${lerp(24, 39, hov)},${lerp(27, 42, hov)})` : '#18181B', borderColor: hov ? `rgba(255,255,255,${0.12 + 0.5 * hov})` : '#27272A' });
+    });
+  }
+  const te = env(t, 9.5, 10.0, { din: 0.02, rin: 0.3, rout: 0.15 });
+  if (te.op < 0.003) el.tip.style.display = 'none';
+  else {
+    const tx = F.tCell.x, tyy = F.tCell.y - TT.cellH * 0.55 - 14;
+    el.tip.innerHTML = `<div style="font-size:19px;font-weight:650;white-space:nowrap">Алгоритми і методи обчислень</div><div style="margin-top:6px;font-size:16px;color:#52525B;white-space:nowrap">Лекція · 11:50 - 13:10 · навчальний-42</div>`;
+    Object.assign(el.tip.style, { display: 'block', left: tx - 190 + 'px', top: tyy - 82 + 'px', width: '380px', padding: '16px 18px', borderRadius: '16px', background: WHITE, color: INK,
+      boxShadow: '0 1px 2px rgba(0,0,0,.08), 0 14px 30px -10px rgba(0,0,0,.45)', opacity: te.op, transformOrigin: '50% 100%',
+      transform: `translateY(${(1 - te.en) * 10}px) scale(${0.94 + 0.06 * te.en})`, filter: te.op > 0.99 ? 'none' : `blur(${(1 - te.op) * 6}px)` });
+  }
+
+  // ⌘K: the knob is the key cap; then the selection; typing «Нов»
+  $('#pTx').textContent = typed(t, 10.62, 0.08, 'Нов');
+  $('#pPh').style.opacity = t < 10.62 ? 1 : 0;
+  $('#pCaret').style.opacity = t < 10.9 ? 1 : (mod(t, 0.5) < 0.25 ? 1 : 0);
+  $('#enterKey').style.transform = `scale(${1 - 0.12 * press(t, [11.5])})`;
+  $('#enterKey').style.background = press(t, [11.5]) > 0.3 ? '#E4E4E7' : SOFT;
+  SEARCH.forEach((row, i) => {
+    const L = LAYERS.find(l => l.id === 'lRow' + i);
+    const sel = (i === 0 && t < 11.0) || (i === 1 && t >= 11.0) ? (i === 1 ? S(t - 11.0, 0.3, 1) : 1) : 0;
+    const el2 = L.el, c1 = sel > 0.5 ? '#fff' : INK, c2 = sel > 0.5 ? 'rgba(255,255,255,.78)' : '#71717A';
+    el2.querySelector('.rowT1').style.color = c1; el2.querySelector('.rowT2').style.color = c2;
+    const icEl = el2.querySelector('.rowIc'), arEl = el2.querySelector('.rowAr');
+    const want = sel > 0.5 ? 'w' : 'k';
+    if (icEl.dataset.st !== want) { icEl.dataset.st = want; icEl.innerHTML = icon(icEl.dataset.ic, 30, sel > 0.5 ? '#fff' : '#3F3F46'); arEl.innerHTML = icon('arrow-right', 22, sel > 0.5 ? '#fff' : '#A1A1AA'); }
+  });
+
+  // cursor: constant size on screen, follows world positions through the camera
+  const [cxw, cyw] = F.cursor(t);
+  const held = t >= F.GRAB - 0.03 && t < F.REL ? 1 : 0;
+  const pc = Math.max(press(t), held);
+  el.cursor.style.transform = `translate(${720 + s * cxw * pressShape}px, ${720 + s * cyw * pressShape}px) scale(${1.32 * (1 - 0.14 * pc)})`;
+}
+
+// arrow-right → clock: shaft becomes the hour hand, the chevron folds into the minute hand, the dial draws
+function clockMorph(m) {
+  const k = clamp(m, 0, 1);
+  const A = (a, b) => P(a, b, k);
+  const s0 = A([5, 12], [12, 6]), s1 = A([19, 12], [12, 12]);
+  const c0 = A([12, 5], [12, 12]), c1 = A([19, 12], [16, 14]), c2 = A([12, 19], [16, 14]);
+  const circ = 2 * Math.PI * 10;
+  return `<circle cx="12" cy="12" r="10" stroke-dasharray="${circ * k} ${circ}" transform="rotate(-90 12 12)" opacity="${k > 0.01 ? 1 : 0}"/>
+    <path d="M${s0} L${s1}"/><path d="M${c0} L${c1} L${c2}"/>`;
+}
+
+// sound cues (UI sounds are placed by their measured peak in audio.py)
+window.SOUNDS = [
+  { t: 0.0, k: 'click' }, ...[...'student'].map((_, i) => ({ t: 0.5 + i * 0.064, k: 'key' })),
+  ...Array.from({ length: 11 }, (_, i) => ({ t: 1.06 + i * 0.034, k: 'key', g: 0.6 })),
+  { t: 1.5, k: 'click' }, { t: 2.0, k: 'swish', g: 0.5 }, { t: 2.5, k: 'chime' }, { t: 3.0, k: 'pop' },
+  { t: 3.5, k: 'click' }, { t: 4.0, k: 'click' }, { t: 4.5, k: 'grab' }, { t: 5.0, k: 'tock' }, { t: 5.5, k: 'release' },
+  { t: 6.0, k: 'swish', g: 0.5 }, { t: 6.5, k: 'toggle' }, { t: 7.0, k: 'pop', g: 0.7 }, { t: 7.5, k: 'click' }, { t: 8.0, k: 'click' },
+  { t: 8.5, k: 'whoosh' }, ...[0, 1, 2, 3, 4].map(c => ({ t: 9.0 + c * 0.055, k: 'tick', g: 0.45 })), { t: 9.5, k: 'hover' },
+  { t: 10.0, k: 'whoosh', g: 0.8 }, { t: 10.5, k: 'swish', g: 0.5 }, ...[0, 1, 2].map(i => ({ t: 10.62 + i * 0.08, k: 'key' })),
+  { t: 11.0, k: 'pop', g: 0.6 }, { t: 11.5, k: 'enter' }, { t: 12.0, k: 'pop' }, { t: 12.5, k: 'swish', g: 0.5 }, { t: 13.0, k: 'swish', g: 0.6 },
+];
+
+window.ready = (async () => {
+  await document.fonts.load('600 20px Geist'); await document.fonts.load('400 20px Geist'); await document.fonts.load('700 20px Geist');
+  await document.fonts.ready;
+  build();
+  window.seek = seek;
+  const q = new URLSearchParams(location.search);
+  if (q.has('t')) seek(+q.get('t'));
+  else if (q.has('play')) { const t0 = performance.now(); const loop = () => { seek((performance.now() - t0) / 1000); requestAnimationFrame(loop); }; loop(); }
+  else seek(0);
+  return true;
+})();
+</script>
+</body>
+</html>
