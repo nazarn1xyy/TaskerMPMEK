@@ -209,6 +209,8 @@ export function createApp({ store, realtime, files }) {
   app.use('/api/state', compress())
 
   app.onError((err, c) => {
+    // auth challenges (401 from basicAuth) must reach the browser as-is so it shows the login prompt
+    if (typeof err.getResponse === 'function') return err.getResponse()
     console.error(err)
     // driver errors (e.g. AggregateError on connect) often have an empty message
     const inner = err.errors?.[0] ?? err.cause
