@@ -3,3 +3,4 @@ audio/*.mp3
 out/*
 !out/mpmek-loop.mp4
 !out/beats-sheet.png
+__pycache__/
