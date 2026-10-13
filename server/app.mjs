@@ -210,7 +210,10 @@ export function createApp({ store, realtime, files }) {
 
   app.onError((err, c) => {
     console.error(err)
-    return c.json({ error: err.message }, 400)
+    // driver errors (e.g. AggregateError on connect) often have an empty message
+    const inner = err.errors?.[0] ?? err.cause
+    const message = err.message || inner?.message || err.code || inner?.code || err.name || 'Помилка сервера'
+    return c.json({ error: message }, 400)
   })
 
   app.get('/api/state', async (c) => {
