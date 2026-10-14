@@ -156,7 +156,7 @@ export function StatsView() {
                   <th scope="row">
                     <span className="table-person">
                       <Avatar member={p.m} size={22} />
-                      {p.m.name}
+                      <Name name={p.m.name} />
                     </span>
                   </th>
                   <td>
@@ -393,7 +393,7 @@ function Workload({ tasks, members, today }: { tasks: Task[]; members: Member[];
         <tbody>
           {grid.map((g) => (
             <tr key={g.m.id} onClick={() => go({ name: 'member', id: g.m.id })}>
-              <th scope="row">{g.m.name}</th>
+              <th scope="row"><Name name={g.m.name} /></th>
               {g.counts.map((c, i) => (
                 <td key={i} className="load">
                   <span className="num">{c || '·'}</span>
@@ -426,14 +426,14 @@ function Matrix({ tasks, members, from, to }: { tasks: Task[]; members: Member[]
           <tr>
             <th className="matrix-corner">поставив ↓ / кому →</th>
             {members.map((m) => (
-              <th key={m.id}>{m.name}</th>
+              <th key={m.id}>{m.name.split(' ')[0]}</th>
             ))}
           </tr>
         </thead>
         <tbody>
           {members.map((a) => (
             <tr key={a.id}>
-              <th scope="row">{a.name}</th>
+              <th scope="row"><Name name={a.name} /></th>
               {members.map((b) => {
                 const n = count(a.id, b.id)
                 return (
@@ -491,5 +491,17 @@ function Feed() {
         </li>
       )}
     </ol>
+  )
+}
+
+/** Full name on wide screens, first name on phones where tables are tight. */
+function Name({ name }: { name: string }) {
+  const first = name.split(' ')[0]
+  if (first === name) return <>{name}</>
+  return (
+    <>
+      <span className="name-full">{name}</span>
+      <span className="name-short">{first}</span>
+    </>
   )
 }

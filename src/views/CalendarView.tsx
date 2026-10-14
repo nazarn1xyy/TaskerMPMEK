@@ -2,10 +2,10 @@ import { memo, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import { updateTask, useStore } from '../lib/store'
 import { go, openTask, useLocation } from '../lib/router'
-import { addDays, addMonths, cap, MONTHS_SHORT, isOverdue, monthEnd, monthLabel, monthStart, plural, todayIso, weekEnd, weekLabel, WEEKDAYS_SHORT, weekStart } from '../lib/dates'
+import { addDays, addMonths, cap, MONTHS_SHORT, isOverdue, monthEnd, monthLabel, monthStart, plural, relDay, shortDate, todayIso, weekday, WEEKDAYS, weekEnd, weekLabel, WEEKDAYS_SHORT, weekStart } from '../lib/dates'
 import { dayOf, rescheduleTo } from '../lib/filters'
 import { drag, useTaskDrop } from '../lib/dnd'
-import { useHotkeys, useLiveTasks, useMembers, usePersistedValue } from '../lib/hooks'
+import { COMPACT, useHotkeys, useLiveTasks, useMedia, useMembers, usePersistedValue } from '../lib/hooks'
 import type { Member, Task } from '../lib/types'
 import { AddRow, CheckButton } from '../components/TaskList'
 import { WhoTabs } from '../components/FilterBar'
@@ -71,6 +71,13 @@ export function CalendarView({ mode, date }: { mode: Mode; date: string }) {
   const weeks: string[] = []
   for (let w = start; w <= end; w = addDays(w, 7)) weeks.push(w)
   const defaults = useMemo(() => ({ assigneeId: whoId ?? me }), [whoId, me])
+
+  // Phones: the month grid becomes a date picker with dots, the chosen day's tasks list below it.
+  const compact = useMedia(COMPACT)
+  const agenda = compact && mode === 'month'
+  const [picked, setPicked] = useState<string | null>(null)
+  const pickedDay = picked && picked.slice(0, 7) === date.slice(0, 7) ? picked : today.slice(0, 7) === date.slice(0, 7) ? today : date
+  const pickedWeek = byWeek.get(weekStart(pickedDay)) ?? []
 
   return (
     <div className="page page-wide">
@@ -142,12 +149,50 @@ export function CalendarView({ mode, date }: { mode: Mode; date: string }) {
             <div className="cal-days">
               {Array.from({ length: 7 }, (_, i) => {
                 const d = addDays(w, i)
-                return <DayCell key={d} day={d} tasks={byDay.get(d) ?? []} mode={mode} outside={mode === 'month' && d.slice(0, 7) !== date.slice(0, 7)} today={today} defaults={defaults} members={members} showWho={!whoId} />
+                return (
+                  <DayCell
+                    key={d}
+                    day={d}
+                    tasks={byDay.get(d) ?? []}
+                    mode={mode}
+                    outside={mode === 'month' && d.slice(0, 7) !== date.slice(0, 7)}
+                    today={today}
+                    defaults={defaults}
+                    members={members}
+                    showWho={!whoId}
+                    picked={agenda && d === pickedDay}
+                    onPick={agenda ? setPicked : undefined}
+                  />
+                )
               })}
             </div>
           </div>
         ))}
       </div>
+
+      {agenda && (
+        <section className="agenda">
+          <div className="agenda-head">
+            <h3 className="section-label">{relDay(pickedDay, today) === shortDate(pickedDay) ? cap(WEEKDAYS[weekday(pickedDay)]) : relDay(pickedDay, today)}, {shortDate(pickedDay)}</h3>
+            <button type="button" className="link-btn" onClick={() => go({ name: 'tasks', period: 'day', date: pickedDay })}>
+              Відкрити день
+            </button>
+          </div>
+          {(byDay.get(pickedDay) ?? []).map((t) => (
+            <CalItem key={t.id} task={t} day={pickedDay} member={t.assigneeId ? members[t.assigneeId] : undefined} showWho={!whoId} />
+          ))}
+          {!(byDay.get(pickedDay) ?? []).length && <p className="section-empty">На цей день нічого немає</p>}
+          <AddRow defaults={{ ...defaults, scope: 'day', date: pickedDay }} />
+          {pickedWeek.length > 0 && (
+            <>
+              <h3 className="section-label agenda-sub">На тиждень</h3>
+              {pickedWeek.map((t) => (
+                <CalItem key={t.id} task={t} member={t.assigneeId ? members[t.assigneeId] : undefined} showWho={!whoId} />
+              ))}
+            </>
+          )}
+        </section>
+      )}
     </div>
   )
 }
@@ -163,6 +208,8 @@ const DayCell = memo(function DayCell({
   defaults,
   members,
   showWho,
+  picked,
+  onPick,
 }: {
   day: string
   tasks: Task[]
@@ -172,6 +219,8 @@ const DayCell = memo(function DayCell({
   defaults: Partial<Task>
   members: Record<string, Member>
   showWho: boolean
+  picked?: boolean
+  onPick?: (day: string) => void
 }) {
   const [adding, setAdding] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -185,10 +234,10 @@ const DayCell = memo(function DayCell({
   const limit = mode === 'month' && !expanded ? MAX_IN_CELL : Infinity
   const shown = tasks.slice(0, limit)
   const hidden = tasks.length - shown.length
-  const cls = ['cal-day', outside && 'is-out', day === today && 'is-today', day < today && 'is-past', over && 'is-over', Number(day.slice(8)) === 1 && 'is-first'].filter(Boolean).join(' ')
+  const cls = ['cal-day', outside && 'is-out', day === today && 'is-today', day < today && 'is-past', over && 'is-over', Number(day.slice(8)) === 1 && 'is-first', picked && 'is-picked'].filter(Boolean).join(' ')
 
   return (
-    <div className={cls} {...props} onDoubleClick={(e) => e.target === e.currentTarget && setAdding(true)}>
+    <div className={cls} {...props} onClick={onPick ? () => onPick(day) : undefined} onDoubleClick={(e) => !onPick && e.target === e.currentTarget && setAdding(true)}>
       <div className="cal-day-head">
         <button type="button" className="cal-num" onClick={() => go({ name: 'tasks', period: 'day', date: day })} title="Відкрити день">
           {Number(day.slice(8))}
@@ -198,6 +247,13 @@ const DayCell = memo(function DayCell({
           <Plus size={14} strokeWidth={1.6} />
         </button>
       </div>
+      {onPick && (
+        <div className="cal-dots" aria-hidden>
+          {tasks.slice(0, 4).map((t) => (
+            <i key={t.id} className={t.status !== 'open' ? 'is-done' : isOverdue(t) ? 'is-overdue' : ''} />
+          ))}
+        </div>
+      )}
       <div className="cal-items">
         {shown.map((t) => (
           <CalItem key={t.id} task={t} day={day} member={t.assigneeId ? members[t.assigneeId] : undefined} showWho={showWho} />

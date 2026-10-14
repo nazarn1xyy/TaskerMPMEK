@@ -121,8 +121,20 @@ export function Lightbox({ images, index, onIndex, onClose }: { images: Attachme
     return () => window.removeEventListener('keydown', key, true)
   }, [index, images.length, onClose, onIndex])
 
+  // swipe between photos on touch screens
+  const touchX = useRef<number | null>(null)
+  const swipe = {
+    onTouchStart: (e: React.TouchEvent) => (touchX.current = e.touches.length === 1 ? e.touches[0].clientX : null),
+    onTouchEnd: (e: React.TouchEvent) => {
+      if (touchX.current === null || images.length < 2) return
+      const dx = e.changedTouches[0].clientX - touchX.current
+      touchX.current = null
+      if (Math.abs(dx) > 50) onIndex((index + (dx < 0 ? 1 : -1) + images.length) % images.length)
+    },
+  }
+
   return createPortal(
-    <div className="lightbox" onClick={onClose}>
+    <div className="lightbox" onClick={onClose} {...swipe}>
       <div className="lightbox-bar" onClick={(e) => e.stopPropagation()}>
         <span className="lightbox-name">{a.name}</span>
         <span className="file-meta">

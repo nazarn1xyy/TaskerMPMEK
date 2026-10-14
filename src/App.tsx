@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Menu as MenuIcon, Plus, X } from 'lucide-react'
+import { CalendarDays, CalendarRange, Menu as MenuIcon, Plus, Search, Sun, X } from 'lucide-react'
 import { boot, dismissToast, undoLast, useStore } from './lib/store'
 import { go, openTask, useLocation, type Route } from './lib/router'
 import { useHotkeys, isTyping } from './lib/hooks'
 import { monthStart, todayIso, weekStart } from './lib/dates'
 import type { Task } from './lib/types'
-import { Sidebar } from './components/Sidebar'
+import { Sidebar, UserMenu, useTodayCount } from './components/Sidebar'
 import { TaskDrawer } from './components/TaskDrawer'
 import { Palette } from './components/Palette'
 import { DialogHost } from './components/Dialog'
-import { Kbd } from './components/ui'
+import { Avatar, Kbd } from './components/ui'
 import { TasksView } from './views/TasksView'
 import { Onboarding, Picker } from './views/Welcome'
 
@@ -75,7 +75,35 @@ function Shell() {
   const [nav, setNav] = useState(false)
   const today = todayIso()
 
+  const meMember = useStore((s) => (s.me ? s.members[s.me] : undefined))
   const defaults = useMemo(() => ({ assigneeId: me, ...contextDefaults(route, me) }), [route, me])
+
+  // a new section starts at the top, like any other app
+  const { path } = useLocation()
+  useEffect(() => {
+    document.getElementById('main')?.scrollTo({ top: 0 })
+    setNav(false)
+  }, [path])
+
+  // iOS-style large title: the bar shows the section name only once the big headline scrolls away
+  const [titleVisible, setTitleVisible] = useState(false)
+  useEffect(() => {
+    setTitleVisible(false)
+    const main = document.getElementById('main')
+    const head = main?.querySelector('.page-head .display, .page-head .hero')
+    if (!main || !head) return setTitleVisible(true)
+    const io = new IntersectionObserver(([e]) => setTitleVisible(!e.isIntersecting), { root: main, threshold: 0 })
+    io.observe(head)
+    return () => io.disconnect()
+  }, [path])
+
+  // close the slide-out menu with the system back gesture / Escape
+  useEffect(() => {
+    if (!nav) return
+    const key = (e: KeyboardEvent) => e.key === 'Escape' && setNav(false)
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [nav])
 
   useHotkeys({
     'mod+k': (e) => (e.preventDefault(), setPalette((p) => (p ? null : 'search'))),
@@ -108,20 +136,19 @@ function Shell() {
 
   return (
     <div className={`app${task ? ' has-drawer' : ''}${nav ? ' nav-open' : ''}`}>
-      <div className="topbar">
-        <button type="button" className="icon-btn" aria-label="Меню" onClick={() => setNav(true)}>
-          <MenuIcon size={20} strokeWidth={1.6} />
+      <header className="topbar">
+        <UserMenu className="topbar-me" label={<Avatar member={meMember} size={30} />} />
+        <span className={`topbar-title${titleVisible ? ' is-visible' : ''}`}>{sectionTitle(route, today)}</span>
+        <button type="button" className="icon-btn topbar-btn" aria-label="Пошук" onClick={() => setPalette('search')}>
+          <Search size={20} strokeWidth={1.6} />
         </button>
-        <span className="topbar-title">Таскер</span>
-        <button type="button" className="icon-btn" aria-label="Нове завдання" onClick={() => setPalette('create')}>
-          <Plus size={20} strokeWidth={1.6} />
-        </button>
-      </div>
+      </header>
       <div className="side-shade" onClick={() => setNav(false)} />
       <Sidebar route={route} onPalette={() => setPalette('search')} onNew={() => setPalette('create')} onNavigate={() => setNav(false)} />
       <main className="main" id="main">
         <View route={route} />
       </main>
+      <TabBar route={route} today={today} onNew={() => setPalette('create')} onMore={() => setNav(true)} moreActive={nav} />
       {task && <TaskDrawer id={task} />}
       {palette && <Palette mode={palette} defaults={defaults} onClose={() => setPalette(null)} />}
       {help && <Shortcuts onClose={() => setHelp(false)} />}
@@ -225,5 +252,58 @@ function Shortcuts({ onClose }: { onClose: () => void }) {
       </div>
     </div>,
     document.body,
+  )
+}
+
+function sectionTitle(route: Route, today: string) {
+  switch (route.name) {
+    case 'tasks':
+      if (route.period === 'day') return route.date === today ? 'Сьогодні' : 'День'
+      return route.period === 'week' ? 'Тиждень' : route.period === 'month' ? 'Місяць' : 'Усі завдання'
+    case 'calendar':
+      return 'Календар'
+    case 'projects':
+    case 'project':
+      return 'Проєкти'
+    case 'team':
+    case 'member':
+      return 'Команда'
+    case 'stats':
+      return 'Статистика'
+  }
+}
+
+/** Phone navigation: the four places people go most, plus a big «+» in thumb reach. */
+function TabBar({ route, today, onNew, onMore, moreActive }: { route: Route; today: string; onNew: () => void; onMore: () => void; moreActive: boolean }) {
+  const { count, overdue } = useTodayCount()
+  const isToday = route.name === 'tasks' && route.period === 'day' && route.date === today
+  const isWeek = route.name === 'tasks' && route.period === 'week'
+  const isCal = route.name === 'calendar'
+  const isMore = moreActive || (!isToday && !isWeek && !isCal)
+  return (
+    <nav className="tabbar" aria-label="Розділи">
+      <button type="button" className="tab" aria-current={isToday ? 'page' : undefined} onClick={() => go({ name: 'tasks', period: 'day', date: today })}>
+        <span className="tab-icon">
+          <Sun size={21} strokeWidth={1.6} />
+          {count > 0 && <i className={`tab-badge${overdue ? ' is-alert' : ''}`}>{count}</i>}
+        </span>
+        Сьогодні
+      </button>
+      <button type="button" className="tab" aria-current={isWeek ? 'page' : undefined} onClick={() => go({ name: 'tasks', period: 'week', date: weekStart(today) })}>
+        <CalendarRange size={21} strokeWidth={1.6} />
+        Тиждень
+      </button>
+      <button type="button" className="tab tab-new" aria-label="Нове завдання" onClick={onNew}>
+        <Plus size={24} strokeWidth={1.8} />
+      </button>
+      <button type="button" className="tab" aria-current={isCal ? 'page' : undefined} onClick={() => go({ name: 'calendar', mode: 'month', date: monthStart(today) })}>
+        <CalendarDays size={21} strokeWidth={1.6} />
+        Календар
+      </button>
+      <button type="button" className="tab" aria-current={isMore ? 'page' : undefined} onClick={onMore}>
+        <MenuIcon size={21} strokeWidth={1.6} />
+        Ще
+      </button>
+    </nav>
   )
 }

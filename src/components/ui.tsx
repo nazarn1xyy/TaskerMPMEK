@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Check } from 'lucide-react'
 import { fileUrl } from '../lib/api'
 import { useStore } from '../lib/store'
+import { PHONE, useMedia } from '../lib/hooks'
 import type { Member } from '../lib/types'
 
 export const initials = (name: string) =>
@@ -45,9 +46,13 @@ export function Popover({
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  // On phones an anchored dropdown is cramped and hard to hit — show a bottom sheet instead.
+  const sheet = useMedia(PHONE)
+  const [drag, setDrag] = useState(0)
+  const dragStart = useRef<number | null>(null)
 
   useLayoutEffect(() => {
-    if (!anchor || !ref.current) return
+    if (sheet || !anchor || !ref.current) return
     const place = () => {
       const a = anchor.getBoundingClientRect()
       const p = ref.current!.getBoundingClientRect()
@@ -68,7 +73,7 @@ export function Popover({
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [anchor, placement])
+  }, [anchor, placement, sheet])
 
   useEffect(() => {
     const down = (e: PointerEvent) => {
@@ -92,6 +97,33 @@ export function Popover({
       document.removeEventListener('keydown', key, true)
     }
   }, [anchor, onClose])
+
+  if (sheet) {
+    const grab = {
+      onPointerDown: (e: React.PointerEvent) => {
+        dragStart.current = e.clientY
+        ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+      },
+      onPointerMove: (e: React.PointerEvent) => dragStart.current !== null && setDrag(Math.max(0, e.clientY - dragStart.current)),
+      onPointerUp: () => {
+        dragStart.current = null
+        if (drag > 70) onClose()
+        else setDrag(0)
+      },
+    }
+    return createPortal(
+      <>
+        <div className="sheet-shade" aria-hidden />
+        <div ref={ref} className={`popover is-sheet ${className}`} style={drag ? { transform: `translateY(${drag}px)`, transition: 'none' } : undefined}>
+          <div className="sheet-grip" {...grab}>
+            <i />
+          </div>
+          {children}
+        </div>
+      </>,
+      document.body,
+    )
+  }
 
   return createPortal(
     <div ref={ref} className={`popover ${className}`} style={pos ? { top: pos.top, left: pos.left } : { visibility: 'hidden', top: 0, left: 0 }}>
@@ -209,12 +241,28 @@ export function Segmented<T extends string>({ value, options, onChange, size }: 
 /** Textarea that grows with its content. */
 export function AutoText({ value, onChange, className = '', ...rest }: { value: string; onChange: (v: string) => void } & Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'>) {
   const ref = useRef<HTMLTextAreaElement>(null)
-  useLayoutEffect(() => {
+  const fit = () => {
     const el = ref.current
     if (!el) return
     el.style.height = '0px'
     el.style.height = `${el.scrollHeight}px`
-  }, [value])
+  }
+  useLayoutEffect(fit, [value])
+  // re-measure when the width changes (rotation, drawer opening, fonts arriving)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let width = el.clientWidth
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth !== width) {
+        width = el.clientWidth
+        fit()
+      }
+    })
+    ro.observe(el)
+    document.fonts?.ready.then(fit)
+    return () => ro.disconnect()
+  }, [])
   return <textarea ref={ref} rows={1} className={`autotext ${className}`} value={value} onChange={(e) => onChange(e.target.value)} {...rest} />
 }
 

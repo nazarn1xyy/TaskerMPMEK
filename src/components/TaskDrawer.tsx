@@ -116,9 +116,31 @@ function DrawerBody({ task, onClose }: { task: Task; onClose: () => void }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : null
   const overdue = isOverdue(task)
 
+  // Phones: pull the sheet down by its header to close it, like any native sheet.
+  const [pull, setPull] = useState(0)
+  const pullStart = useRef<number | null>(null)
+  const pullHandlers = {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType !== 'touch' || (e.target as HTMLElement).closest('button')) return
+      pullStart.current = e.clientY
+      e.currentTarget.setPointerCapture(e.pointerId)
+    },
+    onPointerMove: (e: React.PointerEvent) => pullStart.current !== null && setPull(Math.max(0, e.clientY - pullStart.current)),
+    onPointerUp: () => {
+      if (pullStart.current === null) return
+      pullStart.current = null
+      if (pull > 110) onClose()
+      else setPull(0)
+    },
+    onPointerCancel: () => {
+      pullStart.current = null
+      setPull(0)
+    },
+  }
+
   return (
-    <aside className="drawer" aria-label="Завдання">
-      <div className="drawer-top">
+    <aside className="drawer" aria-label="Завдання" style={pull ? { transform: `translateY(${pull}px)`, transition: 'none' } : undefined}>
+      <div className="drawer-top" {...pullHandlers}>
         <span className="drawer-crumb">
           {project ? project.name : 'Без проєкту'}
           {task.repeat !== 'none' && ` · ${REPEAT_LABEL[task.repeat].toLowerCase()}`}

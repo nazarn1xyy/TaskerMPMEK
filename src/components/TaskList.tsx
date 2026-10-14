@@ -3,10 +3,10 @@ import { ListChecks, MessageSquare, MoreHorizontal, Paperclip, Plus, Repeat } fr
 import { addTask, duplicateTask, removeTask, setStatus, updateTask, useStore } from '../lib/store'
 import { openTask, useLocation } from '../lib/router'
 import { drag, useTaskDrop } from '../lib/dnd'
-import { isOverdue, relDay, relMonth, relWeek, todayIso } from '../lib/dates'
-import type { Section } from '../lib/filters'
+import { addDays, isOverdue, relDay, relMonth, relWeek, todayIso, weekStart } from '../lib/dates'
+import { rescheduleTo, type Section } from '../lib/filters'
 import { parseQuickAdd } from '../lib/parse'
-import { useMembers, useProjects, useTaskCounters } from '../lib/hooks'
+import { haptic, isTouch, useMembers, useProjects, useTaskCounters } from '../lib/hooks'
 import type { Member, Status, Task } from '../lib/types'
 import { Avatar, Menu, Popover, type MenuItem } from './ui'
 
@@ -88,7 +88,7 @@ const SectionBlock = memo(function SectionBlock({ section, options, openId }: { 
           </div>
         ))}
         {over && mark !== null && mark >= section.tasks.length && <div className="drop-mark" />}
-        {!section.tasks.length && <div className="section-empty">{section.drop ? 'Порожньо — перетягніть сюди завдання' : 'Порожньо'}</div>}
+        {!section.tasks.length && <div className="section-empty">{section.drop && !isTouch() ? 'Порожньо — перетягніть сюди завдання' : 'Порожньо'}</div>}
         {!options.readOnly && section.create && <AddRow defaults={section.create} />}
       </div>
     </section>
@@ -158,7 +158,13 @@ export function statusMenu(task: Task, extra = true): MenuItem[] {
   const items = [status('open', 'Не виконано'), status('done', 'Виконано', 'X'), status('cancelled', 'Скасовано')]
   if (!extra) return items
   return [
+    { key: 'h-status', label: 'Статус', header: true },
     ...items,
+    { key: 'h-move', label: 'Перенести', header: true },
+    { key: 'm-today', label: 'На сьогодні', onSelect: () => updateTask(task.id, rescheduleTo(task, todayIso())) },
+    { key: 'm-tomorrow', label: 'На завтра', onSelect: () => updateTask(task.id, rescheduleTo(task, addDays(todayIso(), 1))) },
+    { key: 'm-next', label: 'На наступний понеділок', onSelect: () => updateTask(task.id, rescheduleTo(task, addDays(weekStart(todayIso()), 7))) },
+    { key: 'm-none', label: 'Без терміну', onSelect: () => updateTask(task.id, { scope: 'none', date: null, due: null, dueTime: null }) },
     { key: 'd1', label: '', divider: true },
     { key: 'open-task', label: 'Відкрити', hint: '↵', onSelect: () => openTask(task.id) },
     { key: 'dup', label: 'Дублювати', onSelect: () => duplicateTask(task.id) },
@@ -187,6 +193,48 @@ export const TaskRow = memo(function TaskRow({ task, selected, dayCtx, bandCtx, 
   const overdue = isOverdue(task)
   const checklist = task.checklist.length ? `${task.checklist.filter((c) => c.done).length}/${task.checklist.length}` : null
 
+  // Touch: swipe right toggles done, swipe left opens the action sheet. Vertical scrolling stays native.
+  const swipe = useRef<{ x: number; y: number; active: boolean } | null>(null)
+  const swallowClick = useRef(false)
+  const [dx, setDx] = useState(0)
+  const ARM = 72
+  const touch = {
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType !== 'touch') return
+      swipe.current = { x: e.clientX, y: e.clientY, active: false }
+    },
+    onPointerMove: (e: React.PointerEvent) => {
+      const s = swipe.current
+      if (!s) return
+      const ddx = e.clientX - s.x
+      const ddy = e.clientY - s.y
+      if (!s.active) {
+        if (Math.abs(ddy) > 10 && Math.abs(ddy) > Math.abs(ddx)) swipe.current = null
+        else if (Math.abs(ddx) > 12) {
+          s.active = true
+          ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+        }
+        return
+      }
+      const next = Math.max(-130, Math.min(130, ddx))
+      if ((Math.abs(dx) < ARM) !== (Math.abs(next) < ARM)) haptic(6)
+      setDx(next)
+    },
+    onPointerUp: () => {
+      const s = swipe.current
+      swipe.current = null
+      if (!s?.active) return
+      swallowClick.current = true
+      if (dx > ARM) setStatus(task.id, task.status === 'done' ? 'open' : 'done')
+      else if (dx < -ARM) setMenu(true)
+      setDx(0)
+    },
+    onPointerCancel: () => {
+      swipe.current = null
+      setDx(0)
+    },
+  }
+
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return
     const focusSibling = (dir: 1 | -1) => {
@@ -204,15 +252,29 @@ export const TaskRow = memo(function TaskRow({ task, selected, dayCtx, bandCtx, 
   }
 
   return (
+    <>
+    {dx !== 0 && (
+      <div className={`swipe-bg ${dx > 0 ? 'is-done-side' : 'is-menu-side'}${Math.abs(dx) > ARM ? ' is-armed' : ''}`} aria-hidden>
+        {dx > 0 ? (task.status === 'done' ? 'Повернути' : 'Виконано') : 'Дії'}
+      </div>
+    )}
     <div
       ref={rowRef}
       data-row={task.id}
       tabIndex={0}
-      className={`row is-${task.status}${selected ? ' is-selected' : ''}`}
-      draggable
+      className={`row is-${task.status}${selected ? ' is-selected' : ''}${dx ? ' is-swiping' : ''}`}
+      style={dx ? { transform: `translateX(${dx}px)` } : undefined}
+      draggable={!isTouch()}
       onDragStart={(e) => drag.start(e, task.id)}
       onDragEnd={() => drag.end()}
-      onClick={() => openTask(task.id)}
+      {...touch}
+      onClick={() => {
+        if (swallowClick.current) {
+          swallowClick.current = false
+          return
+        }
+        openTask(task.id)
+      }}
       onKeyDown={onKey}
       onContextMenu={(e) => {
         e.preventDefault()
@@ -223,6 +285,7 @@ export const TaskRow = memo(function TaskRow({ task, selected, dayCtx, bandCtx, 
       <div className="row-main">
         <span className="row-title">{task.title || <span className="muted">Без назви</span>}</span>
         <span className="row-meta">
+          {date && <span className={`row-date row-date-meta${overdue ? ' is-overdue' : ''}`}>{date}</span>}
           {projectName && <span className="row-project">{projectName}</span>}
           {checklist && (
             <span className="meta-item" title="Пункти">
@@ -262,7 +325,7 @@ export const TaskRow = memo(function TaskRow({ task, selected, dayCtx, bandCtx, 
       </div>
       <div className="row-side">
         {task.priority > 0 && <span className={`prio p${task.priority}`}>{'!'.repeat(task.priority)}</span>}
-        {date && <span className={`row-date${overdue ? ' is-overdue' : ''}`}>{date}</span>}
+        {date && <span className={`row-date row-date-side${overdue ? ' is-overdue' : ''}`}>{date}</span>}
         {assignee && <Avatar member={assignee} size={20} online={online} />}
         <button
           ref={moreRef}
@@ -285,6 +348,7 @@ export const TaskRow = memo(function TaskRow({ task, selected, dayCtx, bandCtx, 
         </Popover>
       )}
     </div>
+    </>
   )
 })
 

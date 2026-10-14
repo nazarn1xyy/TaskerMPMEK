@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react'
-import { ListFilter, Search, X } from 'lucide-react'
+import { ListFilter, Rows3, Search, X } from 'lucide-react'
 import { emptyFilters, filtersActive, type Filters, type GroupBy } from '../lib/filters'
 import { useHotkeys, useLiveTasks, useMembers, useProjects } from '../lib/hooks'
 import type { Status } from '../lib/types'
@@ -60,7 +60,7 @@ export function FilterBar({
         )}
       </label>
 
-      <PopButton className={`tool-btn${filtersActive({ ...filters, q: '' }) ? ' is-on' : ''}`} label={<><ListFilter size={15} strokeWidth={1.6} /> Фільтр</>} popClass="pop-filter">
+      <PopButton className={`tool-btn${filtersActive({ ...filters, q: '' }) ? ' is-on' : ''}`} label={<><ListFilter size={15} strokeWidth={1.6} /> <span className="tool-text">Фільтр</span></>} popClass="pop-filter">
         {() => (
           <div className="filter-pop">
             <Menu
@@ -89,7 +89,7 @@ export function FilterBar({
       </PopButton>
 
       {groupBy && onGroupBy && (
-        <PopButton className="tool-btn" label={<>Групи: {GROUP_LABEL[groupBy]}</>}>
+        <PopButton className="tool-btn" label={<><Rows3 size={15} strokeWidth={1.6} className="tool-icon" /> <span className="tool-text">Групи: {GROUP_LABEL[groupBy]}</span></>} title={`Групи: ${GROUP_LABEL[groupBy]}`}>
           {(close) => <Menu onDone={close} items={groupOptions.map((g) => ({ key: g, label: GROUP_LABEL[g], checked: g === groupBy, onSelect: () => onGroupBy(g) }))} />}
         </PopButton>
       )}

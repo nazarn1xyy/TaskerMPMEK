@@ -13,6 +13,8 @@ export function toggleTheme() {
   const dark = root.dataset.theme !== 'dark'
   root.dataset.theme = dark ? 'dark' : 'light'
   localStorage.setItem('tasker.theme', dark ? 'dark' : 'light')
+  // keep the phone status bar / browser chrome in step with the app
+  document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]').forEach((m) => (m.content = dark ? '#121212' : '#f3f3f1'))
 }
 
 function NavItem({ active, onClick, children, count, alert, hotkey }: { active: boolean; onClick: () => void; children: ReactNode; count?: number; alert?: boolean; hotkey?: string }) {
@@ -32,6 +34,50 @@ const DropItem = memo(function DropItem({ onDrop, children }: { onDrop: (id: str
     </div>
   )
 })
+
+/** Who am I + theme + sign out. Used in the sidebar and in the phone top bar. */
+export function UserMenu({ className, label }: { className: string; label: ReactNode }) {
+  const me = useStore((s) => s.me)
+  const members = useMembers()
+  return (
+    <PopButton className={className} label={label} title="Учасник і тема">
+      {(close) => (
+        <Menu
+          onDone={close}
+          items={[
+            { key: 'h', label: 'Працювати як', header: true },
+            ...members.map((m) => ({ key: m.id, label: m.name, icon: <Avatar member={m} size={18} />, checked: m.id === me, onSelect: () => signIn(m.id) })),
+            { key: 'd', label: '', divider: true },
+            {
+              key: 'theme',
+              label: document.documentElement.dataset.theme === 'dark' ? 'Світла тема' : 'Темна тема',
+              icon: document.documentElement.dataset.theme === 'dark' ? <Sun size={15} strokeWidth={1.6} /> : <Moon size={15} strokeWidth={1.6} />,
+              onSelect: toggleTheme,
+            },
+            { key: 'out', label: 'До вибору учасника', icon: <LogOut size={15} strokeWidth={1.6} />, onSelect: () => signIn(null) },
+          ]}
+        />
+      )}
+    </PopButton>
+  )
+}
+
+/** Open tasks for me today, overdue included — the badge on «Сьогодні». */
+export function useTodayCount() {
+  const me = useStore((s) => s.me)
+  const tasks = useLiveTasks()
+  const today = todayIso()
+  return useMemo(() => {
+    let count = 0
+    let overdue = 0
+    for (const t of tasks) {
+      if (t.status !== 'open' || t.assigneeId !== me) continue
+      if (isOverdue(t, today)) overdue++
+      else if (dayOf(t) === today || t.due === today) count++
+    }
+    return { count: count + overdue, overdue }
+  }, [tasks, me, today])
+}
 
 export function Sidebar({ route, onPalette, onNew, onNavigate }: { route: Route; onPalette: () => void; onNew: () => void; onNavigate?: () => void }) {
   const me = useStore((s) => s.me)
@@ -68,7 +114,7 @@ export function Sidebar({ route, onPalette, onNew, onNavigate }: { route: Route;
 
   return (
     <aside className="side">
-      <PopButton
+      <UserMenu
         className="side-me"
         label={
           <>
@@ -77,25 +123,7 @@ export function Sidebar({ route, onPalette, onNew, onNavigate }: { route: Route;
             <ChevronsUpDown size={14} strokeWidth={1.6} className="muted" />
           </>
         }
-      >
-        {(close) => (
-          <Menu
-            onDone={close}
-            items={[
-              { key: 'h', label: 'Працювати як', header: true },
-              ...members.map((m) => ({ key: m.id, label: m.name, icon: <Avatar member={m} size={18} />, checked: m.id === me, onSelect: () => signIn(m.id) })),
-              { key: 'd', label: '', divider: true },
-              {
-                key: 'theme',
-                label: document.documentElement.dataset.theme === 'dark' ? 'Світла тема' : 'Темна тема',
-                icon: document.documentElement.dataset.theme === 'dark' ? <Sun size={15} strokeWidth={1.6} /> : <Moon size={15} strokeWidth={1.6} />,
-                onSelect: toggleTheme,
-              },
-              { key: 'out', label: 'До вибору учасника', icon: <LogOut size={15} strokeWidth={1.6} />, onSelect: () => signIn(null) },
-            ]}
-          />
-        )}
-      </PopButton>
+      />
 
       <nav className="side-nav" aria-label="Розділи">
         <NavItem active={isToday} onClick={() => nav({ name: 'tasks', period: 'day', date: today })} count={counts.today} alert={counts.overdue > 0} hotkey="1">

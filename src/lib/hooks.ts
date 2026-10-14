@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { activeMembers, useStore } from './store'
 import type { Project, Task } from './types'
 
@@ -126,4 +126,32 @@ export function useNow(intervalMs = 60000) {
     return () => clearInterval(id)
   }, [intervalMs])
   return now
+}
+
+const mediaCache = new Map<string, MediaQueryList>()
+const mql = (q: string) => {
+  let m = mediaCache.get(q)
+  if (!m) mediaCache.set(q, (m = window.matchMedia(q)))
+  return m
+}
+
+/** Live media query, e.g. useMedia('(max-width: 640px)'). */
+export function useMedia(query: string) {
+  return useSyncExternalStore(
+    (cb) => {
+      const m = mql(query)
+      m.addEventListener('change', cb)
+      return () => m.removeEventListener('change', cb)
+    },
+    () => mql(query).matches,
+  )
+}
+
+export const PHONE = '(max-width: 640px)'
+export const COMPACT = '(max-width: 900px)'
+/** Touch-first devices: no hover, no native drag and drop worth using. */
+export const isTouch = () => mql('(hover: none) and (pointer: coarse)').matches
+
+export function haptic(ms = 8) {
+  if (isTouch()) navigator.vibrate?.(ms)
 }
