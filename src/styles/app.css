@@ -3910,3 +3910,18 @@ button.person:hover {
     color: var(--accent);
   }
 }
+
+/* iOS home-screen apps: 100vh/100dvh come out one status bar short, leaving a gap under the tab bar.
+   Pinning the shell to all four edges always matches the real screen. */
+@media (max-width: 900px) {
+  .app {
+    position: fixed;
+    inset: 0;
+    height: auto;
+  }
+  .welcome {
+    position: fixed;
+    inset: 0;
+    height: auto;
+  }
+}
