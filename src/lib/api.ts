@@ -16,6 +16,23 @@ export interface StatePayload {
   presence: string[]
   version: number
   mode: { realtime: 'sse' | 'poll'; files: 'disk' | 'blob' }
+  gcal?: GcalStatus
+}
+
+export interface GcalStatus {
+  enabled: boolean
+  connected: Record<string, { email: string; broken: boolean }>
+}
+
+/** A meeting from the member's own Google Calendar (read-only in Tasker). */
+export interface GEvent {
+  id: string
+  title: string
+  day: string
+  time: string | null
+  endTime: string | null
+  allDay: boolean
+  link: string
 }
 
 export type Op =
@@ -50,6 +67,8 @@ export const api = {
   state: () => req<StatePayload>('/api/state'),
   batch: (ops: Op[]) => req<ChangePayload>('/api/batch', { method: 'POST', body: JSON.stringify({ ops }) }),
   poll: (member: string | null) => req<{ version: number; presence: string[] }>(`/api/poll?member=${encodeURIComponent(member ?? '')}`),
+  gcalEvents: (from: string, to: string) => req<{ events: GEvent[] }>(`/api/gcal/events?from=${from}&to=${to}`),
+  gcalDisconnect: () => req<{ ok: boolean }>('/api/gcal/disconnect', { method: 'POST', body: '{}' }),
   attach: (meta: Partial<Attachment>) => req<Attachment>('/api/attachments', { method: 'POST', body: JSON.stringify(meta) }),
 
   upload(form: FormData, onProgress?: (share: number) => void) {

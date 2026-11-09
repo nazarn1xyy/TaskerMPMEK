@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CalendarDays, CalendarRange, Menu as MenuIcon, Plus, Search, Sun, X } from 'lucide-react'
-import { boot, dismissToast, undoLast, useStore } from './lib/store'
+import { boot, dismissToast, toast, undoLast, useStore } from './lib/store'
 import { go, openTask, useLocation, type Route } from './lib/router'
 import { useHotkeys, isTyping } from './lib/hooks'
 import { monthStart, todayIso, weekStart } from './lib/dates'
@@ -128,6 +128,19 @@ function Shell() {
       if (undoLast()) e.preventDefault()
     },
   })
+
+  // back from Google's consent screen
+  useEffect(() => {
+    const m = location.hash.match(/[?&]gcal=(\w+)/)
+    if (!m) return
+    const text: Record<string, string> = {
+      connected: 'Google Календар підключено: завдання з датами вже там',
+      denied: 'Підключення до Google скасовано',
+      error: 'Не вдалося підключити Google Календар — спробуйте ще раз',
+    }
+    toast(text[m[1]] ?? text.error, undefined, m[1] === 'connected' ? undefined : 'error')
+    history.replaceState(null, '', location.hash.replace(/[?&]gcal=\w+/, ''))
+  }, [])
 
   useEffect(() => {
     const open = (e: Event) => openTask((e as CustomEvent<string>).detail)

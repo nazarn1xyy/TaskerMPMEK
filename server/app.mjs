@@ -9,6 +9,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { randomUUID } from 'node:crypto'
+import { createGcal } from './gcal.mjs'
+
+// keep work alive after the response on Vercel; locally a floating promise is fine
+let waitUntil = (p) => p
+import('@vercel/functions').then((m) => (waitUntil = m.waitUntil)).catch(() => {})
+const background = (p) => waitUntil(Promise.resolve(p).catch((err) => console.error('background', err)))
 
 const MAX_FILE = 100 * 1024 * 1024
 const PRESENCE_WINDOW = 30_000
@@ -40,6 +46,8 @@ const SCHEMA = {
     sectionId: null,
     links: [],
     moves: 0,
+    gEvent: null,
+    gEventOwner: null,
   },
   comments: { taskId: null, authorId: null, text: '' },
 }
@@ -159,7 +167,7 @@ export function createApp({ store, realtime, files }) {
       if (col === 'comments') item.authorId ??= actorId
       if (col === 'projects') item.ownerId ??= actorId
       await store.put(col, item)
-      return { put: [[col, item]], activity: await activityFor(col, before, item, actorId) }
+      return { put: [[col, item]], activity: await activityFor(col, before, item, actorId), pair: col === 'tasks' ? [before, item] : null }
     }
 
     const before = await store.get(col, op.id)
@@ -176,7 +184,7 @@ export function createApp({ store, realtime, files }) {
         else Object.assign(item, { completedAt: now, completedBy: actorId })
       }
       await store.put(col, item)
-      return { put: [[col, item]], activity: await activityFor(col, before, item, actorId) }
+      return { put: [[col, item]], activity: await activityFor(col, before, item, actorId), pair: col === 'tasks' ? [before, item] : null }
     }
 
     if (type === 'delete') {
@@ -197,18 +205,31 @@ export function createApp({ store, realtime, files }) {
     const put = []
     const del = []
     const activity = []
+    const pairs = []
+    const fromGoogle = origin === 'gcal'
     for (const op of ops) {
+      // the Google link of a task is server-owned; clients (e.g. «duplicate») must not copy it
+      if (!fromGoogle && op.col === 'tasks' && op.data) {
+        const { gEvent: _e, gEventOwner: _o, ...data } = op.data
+        op.data = data
+      }
       const r = await applyOp(op, actorId)
       put.push(...r.put)
       if (r.del) del.push(...r.del)
       activity.push(...r.activity)
+      if (r.pair) pairs.push(r.pair)
     }
     await store.logActivity(activity)
     const version = await store.bump()
     const result = { put, del, activity, version }
     broadcast('change', { origin, ...result })
+    // changes that came from Google are already there; everything else is mirrored out
+    if (!fromGoogle && pairs.length) background(gcal.push(pairs, appUrl))
     return result
   }
+
+  const gcal = createGcal({ store, runOps, newId })
+  let appUrl = process.env.APP_URL?.replace(/\/$/, '') || null
 
   // ---------- routes ----------
 
@@ -219,6 +240,13 @@ export function createApp({ store, realtime, files }) {
     app.use('/api/*', basicAuth({ username: process.env.TASKER_USER || 'team', password: process.env.TASKER_PASSWORD, realm: 'Tasker' }))
     app.use('/files/*', basicAuth({ username: process.env.TASKER_USER || 'team', password: process.env.TASKER_PASSWORD, realm: 'Tasker' }))
   }
+
+  // remember the public address so calendar events can link back to the task
+  app.use('/api/*', async (c, next) => {
+    if (!process.env.APP_URL) appUrl = new URL(c.req.url).origin
+    await next()
+  })
+  gcal.routes(app)
 
   const actor = (c) => c.req.header('x-member') || null
   const origin = (c) => c.req.header('x-client') || null
@@ -236,8 +264,8 @@ export function createApp({ store, realtime, files }) {
   })
 
   app.get('/api/state', async (c) => {
-    const [snapshot, activity, version, online] = await Promise.all([store.snapshot(), store.activity(), store.version(), presence()])
-    return c.json({ ...snapshot, activity, presence: online, version, mode: { realtime, files } })
+    const [snapshot, activity, version, online, gcalStatus] = await Promise.all([store.snapshot(), store.activity(), store.version(), presence(), gcal.status()])
+    return c.json({ ...snapshot, activity, presence: online, version, mode: { realtime, files }, gcal: gcalStatus })
   })
 
   app.post('/api/batch', async (c) => {
@@ -271,6 +299,8 @@ export function createApp({ store, realtime, files }) {
     // Serverless instances can't hold a shared stream, so clients poll a cheap version counter.
     app.get('/api/poll', async (c) => {
       await store.touch(c.req.query('member') || null)
+      // pick up edits made in Google Calendar (throttled per member)
+      background(gcal.pullMaybe(c.req.query('member') || null))
       const [version, online] = await Promise.all([store.version(), presence()])
       c.header('cache-control', 'no-store')
       return c.json({ version, presence: online })
@@ -374,5 +404,6 @@ export function createApp({ store, realtime, files }) {
     })
   }
 
+  app.gcal = gcal
   return app
 }

@@ -8,6 +8,8 @@ import { isOverdue, monthStart, plural, todayIso, weekStart, isActive } from '..
 import { TaskSections } from '../components/TaskList'
 import { FilterBar, WhoTabs } from '../components/FilterBar'
 import { Segmented } from '../components/ui'
+import { GEventItem } from '../components/GoogleCalendar'
+import { useGoogleEvents } from '../lib/gcal'
 
 const PERIODS: { value: Period; label: string }[] = [
   { value: 'day', label: 'День' },
@@ -93,6 +95,7 @@ export function TasksView({ period, date }: { period: Period; date: string }) {
 
       <FilterBar filters={filters} onFilters={setFilters} groupBy={groupBy} onGroupBy={setGroupBy} />
 
+      {period === 'day' && <DayMeetings date={date} />}
       <TaskSections sections={sections} options={{ showAssignee: whoId === null }} />
 
       {tasks.length === 0 && <QuickHelp />}
@@ -123,5 +126,24 @@ export function QuickHelp() {
         <dd>пріоритет</dd>
       </dl>
     </aside>
+  )
+}
+
+/** Today's meetings from my Google Calendar, above the task list. */
+function DayMeetings({ date }: { date: string }) {
+  const events = useGoogleEvents(date, date).get(date)
+  if (!events?.length) return null
+  return (
+    <section className="section">
+      <header className="section-head">
+        <h3 className="section-label">Зустрічі</h3>
+        <span className="section-count">{events.length}</span>
+      </header>
+      <div className="section-body meetings">
+        {events.map((ev) => (
+          <GEventItem key={ev.id} ev={ev} />
+        ))}
+      </div>
+    </section>
   )
 }

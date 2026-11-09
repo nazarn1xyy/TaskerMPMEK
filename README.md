@@ -44,6 +44,16 @@ docker run -p 3001:3001 -v tasker-data:/data -e TASKER_PASSWORD=секрет tas
 
 Локально тоже можно работать с Postgres: `DATABASE_URL=... npm run dev`.
 
+### Google Календарь
+
+У каждого участника задачи с датой попадают в календарь «Таскер» в его Google-аккаунте, а встречи из основного календаря видны в Таскере. Работает в обе стороны: перетащили событие в Google — задача перенеслась.
+
+1. [Google Cloud Console](https://console.cloud.google.com) → создайте проект → APIs & Services → Library → включите **Google Calendar API**.
+2. OAuth consent screen → External → заполните название и почту → в Scopes добавьте `.../auth/calendar` → **Publish app** (иначе Google отключает доступ каждые 7 дней).
+3. Credentials → Create credentials → OAuth client ID → Web application. В Authorized redirect URIs добавьте `https://ВАШ-ДОМЕН/api/gcal/callback` (и `http://localhost:5173/api/gcal/callback` для локальной работы).
+4. В Vercel → Settings → Environment Variables добавьте `GOOGLE_CLIENT_ID` и `GOOGLE_CLIENT_SECRET`, сделайте Redeploy.
+5. Каждый участник открывает «Календар» → «Підключити Google Календар». Google предупредит, что приложение не проверено: «Додатково» → «Перейти».
+
 ## Что умеет
 
 - **Участники.** На входе показывается команда, участников можно добавлять. Можно смотреть задачи любого участника: «Мои», «Все» или конкретный человек.

@@ -22,6 +22,9 @@ if (PROD) {
 
 await store.purgeDeleted()
 
+// the long-running server reads Google Calendar changes on its own; on Vercel this happens on client polls
+if (app.gcal.enabled) setInterval(() => app.gcal.pullAll().catch((err) => console.error('gcal', err.message)), 30_000)
+
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`Tasker API → http://localhost:${info.port}${PROD ? '' : '  (UI: http://localhost:5173)'}`)
 })

@@ -26,6 +26,18 @@ export function createSqliteStore(dataDir) {
       del: db.prepare(`DELETE FROM ${col} WHERE id = ?`),
     }
   }
+  // private collections (e.g. Google tokens) live in their own tables and never reach /api/state
+  const ensure = (col) => {
+    if (cache[col]) return
+    if (!/^[a-z]+$/.test(col)) throw new Error(`bad collection ${col}`)
+    db.exec(`CREATE TABLE IF NOT EXISTS ${col} (id TEXT PRIMARY KEY, data TEXT NOT NULL)`)
+    cache[col] = new Map()
+    for (const row of db.prepare(`SELECT id, data FROM ${col}`).all()) cache[col].set(row.id, JSON.parse(row.data))
+    stmts[col] = {
+      put: db.prepare(`INSERT INTO ${col} (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`),
+      del: db.prepare(`DELETE FROM ${col} WHERE id = ?`),
+    }
+  }
   const putActivity = db.prepare('INSERT OR IGNORE INTO activity (id, at, data) VALUES (?, ?, ?)')
   const recentActivity = db.prepare('SELECT data FROM activity ORDER BY at DESC LIMIT ?')
   let version = Date.now()
@@ -34,20 +46,24 @@ export function createSqliteStore(dataDir) {
   return {
     uploadDir,
     async all(col) {
+      ensure(col)
       return [...cache[col].values()]
     },
     async snapshot() {
       return Object.fromEntries(COLLECTIONS.map((c) => [c, [...cache[c].values()]]))
     },
     async get(col, id) {
+      ensure(col)
       return cache[col].get(id)
     },
     async put(col, item) {
+      ensure(col)
       cache[col].set(item.id, item)
       stmts[col].put.run(item.id, JSON.stringify(item))
       return item
     },
     async del(col, id) {
+      ensure(col)
       cache[col].delete(id)
       stmts[col].del.run(id)
     },

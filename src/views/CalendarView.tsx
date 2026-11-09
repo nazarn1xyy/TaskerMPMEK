@@ -9,6 +9,9 @@ import { COMPACT, useHotkeys, useLiveTasks, useMedia, useMembers, usePersistedVa
 import type { Member, Task } from '../lib/types'
 import { AddRow, CheckButton } from '../components/TaskList'
 import { WhoTabs } from '../components/FilterBar'
+import { GcalBar, GEventItem } from '../components/GoogleCalendar'
+import { useGoogleEvents } from '../lib/gcal'
+import type { GEvent } from '../lib/api'
 import { Avatar, Segmented } from '../components/ui'
 
 type Mode = 'month' | 'week'
@@ -68,6 +71,7 @@ export function CalendarView({ mode, date }: { mode: Mode; date: string }) {
     е: () => go({ name: 'calendar', mode, date: current }),
   })
 
+  const gEvents = useGoogleEvents(start, end)
   const weeks: string[] = []
   for (let w = start; w <= end; w = addDays(w, 7)) weeks.push(w)
   const defaults = useMemo(() => ({ assigneeId: whoId ?? me }), [whoId, me])
@@ -121,6 +125,8 @@ export function CalendarView({ mode, date }: { mode: Mode; date: string }) {
         </label>
       </div>
 
+      <GcalBar />
+
       {(monthBand.length > 0 || mode === 'week') && (
         <div className="cal-bands">
           {mode === 'week' && <Band label="На тиждень" tasks={byWeek.get(date) ?? []} drop={{ scope: 'week', date }} create={{ ...defaults, scope: 'week', date }} members={members} showWho={!whoId} />}
@@ -154,6 +160,7 @@ export function CalendarView({ mode, date }: { mode: Mode; date: string }) {
                     key={d}
                     day={d}
                     tasks={byDay.get(d) ?? []}
+                    events={gEvents.get(d)}
                     mode={mode}
                     outside={mode === 'month' && d.slice(0, 7) !== date.slice(0, 7)}
                     today={today}
@@ -178,10 +185,13 @@ export function CalendarView({ mode, date }: { mode: Mode; date: string }) {
               Відкрити день
             </button>
           </div>
+          {(gEvents.get(pickedDay) ?? []).map((ev) => (
+            <GEventItem key={ev.id} ev={ev} />
+          ))}
           {(byDay.get(pickedDay) ?? []).map((t) => (
             <CalItem key={t.id} task={t} day={pickedDay} member={t.assigneeId ? members[t.assigneeId] : undefined} showWho={!whoId} />
           ))}
-          {!(byDay.get(pickedDay) ?? []).length && <p className="section-empty">На цей день нічого немає</p>}
+          {!(byDay.get(pickedDay) ?? []).length && !gEvents.get(pickedDay)?.length && <p className="section-empty">На цей день нічого немає</p>}
           <AddRow defaults={{ ...defaults, scope: 'day', date: pickedDay }} />
           {pickedWeek.length > 0 && (
             <>
@@ -210,6 +220,7 @@ const DayCell = memo(function DayCell({
   showWho,
   picked,
   onPick,
+  events = [],
 }: {
   day: string
   tasks: Task[]
@@ -221,6 +232,7 @@ const DayCell = memo(function DayCell({
   showWho: boolean
   picked?: boolean
   onPick?: (day: string) => void
+  events?: GEvent[]
 }) {
   const [adding, setAdding] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -249,12 +261,18 @@ const DayCell = memo(function DayCell({
       </div>
       {onPick && (
         <div className="cal-dots" aria-hidden>
-          {tasks.slice(0, 4).map((t) => (
+          {events.slice(0, 2).map((ev) => (
+            <i key={ev.id} className="is-event" />
+          ))}
+          {tasks.slice(0, 4 - Math.min(2, events.length)).map((t) => (
             <i key={t.id} className={!isActive(t) ? 'is-done' : isOverdue(t) ? 'is-overdue' : ''} />
           ))}
         </div>
       )}
       <div className="cal-items">
+        {events.map((ev) => (
+          <GEventItem key={ev.id} ev={ev} />
+        ))}
         {shown.map((t) => (
           <CalItem key={t.id} task={t} day={day} member={t.assigneeId ? members[t.assigneeId] : undefined} showWho={showWho} />
         ))}

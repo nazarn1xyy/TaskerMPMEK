@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { api, connectEvents, setActor, type ChangePayload, type Op, type StatePayload } from './api'
+import { api, connectEvents, setActor, type ChangePayload, type GcalStatus, type Op, type StatePayload } from './api'
 import type { Activity, Attachment, Collection, CollectionMap, Comment, Member, OwnerType, Project, Status, Task } from './types'
 import { addDays, addMonths, diffDays, todayIso, weekday, isActive } from './dates'
 
@@ -26,6 +26,8 @@ interface State {
   activity: Activity[]
   toasts: Toast[]
   uploads: Record<string, { name: string; ownerId: string; progress: number }>
+  gcal: GcalStatus
+  version: number
 }
 
 const ME_KEY = 'tasker.me'
@@ -44,6 +46,8 @@ export const useStore = create<State>(() => ({
   activity: [],
   toasts: [],
   uploads: {},
+  gcal: { enabled: false, connected: {} },
+  version: 0,
 }))
 
 const set = useStore.setState
@@ -78,6 +82,8 @@ function load(p: StatePayload, notify = false) {
     attachments: toTable(p.attachments),
     activity: p.activity,
     presence: p.presence,
+    gcal: p.gcal ?? { enabled: false, connected: {} },
+    version: p.version ?? 0,
     me: me && p.members.some((m) => m.id === me && !m.archived) ? me : null,
   })
 }
@@ -570,3 +576,6 @@ async function uploadToBlob(
 export function removeAttachment(id: string) {
   commit([{ type: 'delete', col: 'attachments', id }], () => localDel('attachments', id), [id])
 }
+
+/** Re-read everything from the server (after connecting or disconnecting Google). */
+export const refreshState = () => api.state().then(load).catch(() => {})
