@@ -2,7 +2,7 @@ import { memo, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import { updateTask, useStore } from '../lib/store'
 import { go, openTask, useLocation } from '../lib/router'
-import { addDays, addMonths, cap, MONTHS_SHORT, isOverdue, monthEnd, monthLabel, monthStart, plural, relDay, shortDate, todayIso, weekday, WEEKDAYS, weekEnd, weekLabel, WEEKDAYS_SHORT, weekStart } from '../lib/dates'
+import { addDays, addMonths, cap, MONTHS_SHORT, isOverdue, monthEnd, monthLabel, monthStart, plural, relDay, shortDate, todayIso, weekday, WEEKDAYS, weekEnd, weekLabel, WEEKDAYS_SHORT, weekStart, isActive } from '../lib/dates'
 import { dayOf, rescheduleTo } from '../lib/filters'
 import { drag, useTaskDrop } from '../lib/dnd'
 import { COMPACT, useHotkeys, useLiveTasks, useMedia, useMembers, usePersistedValue } from '../lib/hooks'
@@ -38,7 +38,7 @@ export function CalendarView({ mode, date }: { mode: Mode; date: string }) {
     }
     for (const t of tasks) {
       if (whoId && t.assigneeId !== whoId) continue
-      if (!showDone && t.status !== 'open') continue
+      if (!showDone && !isActive(t)) continue
       const d = dayOf(t)
       if (d) {
         if (d >= start && d <= end) (push(byDay, d, t), count++)
@@ -52,7 +52,7 @@ export function CalendarView({ mode, date }: { mode: Mode; date: string }) {
       // wider-horizon tasks with a hard deadline also mark that day
       if (t.due && t.due >= start && t.due <= end && t.scope !== 'none') push(byDay, t.due, t)
     }
-    const sort = (a: Task, b: Task) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || (a.dueTime ?? '99').localeCompare(b.dueTime ?? '99') || a.order - b.order
+    const sort = (a: Task, b: Task) => (isActive(a) ? 0 : 1) - (isActive(b) ? 0 : 1) || (a.dueTime ?? '99').localeCompare(b.dueTime ?? '99') || a.order - b.order
     byDay.forEach((l) => l.sort(sort))
     byWeek.forEach((l) => l.sort(sort))
     monthBand.sort(sort)
@@ -250,7 +250,7 @@ const DayCell = memo(function DayCell({
       {onPick && (
         <div className="cal-dots" aria-hidden>
           {tasks.slice(0, 4).map((t) => (
-            <i key={t.id} className={t.status !== 'open' ? 'is-done' : isOverdue(t) ? 'is-overdue' : ''} />
+            <i key={t.id} className={!isActive(t) ? 'is-done' : isOverdue(t) ? 'is-overdue' : ''} />
           ))}
         </div>
       )}

@@ -9,7 +9,7 @@ import { whenLabel } from './DatePicker'
 
 const URL_RE = /(https?:\/\/[^\s<]+[^\s<.,:;"')\]!?])/g
 
-export function Linkify({ text }: { text: string }) {
+export function Linkify({ text, mentions }: { text: string; mentions?: boolean }) {
   const parts = text.split(URL_RE)
   return (
     <>
@@ -18,6 +18,25 @@ export function Linkify({ text }: { text: string }) {
           <a key={i} href={p} target="_blank" rel="noreferrer">
             {p.replace(/^https?:\/\/(www\.)?/, '').slice(0, 60)}
           </a>
+        ) : (
+          <Fragment key={i}>{mentions ? <Mentions text={p} /> : p}</Fragment>
+        ),
+      )}
+    </>
+  )
+}
+
+/** Highlights @name tokens so people see who was pulled into the thread. */
+function Mentions({ text }: { text: string }) {
+  const parts = text.split(/((?:^|\s)@[^\s@,.!?:;]+)/g)
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 ? (
+          <Fragment key={i}>
+            {p.startsWith('@') ? '' : p[0]}
+            <span className="mention">{p.trim()}</span>
+          </Fragment>
         ) : (
           <Fragment key={i}>{p}</Fragment>
         ),
@@ -40,6 +59,12 @@ export function Comments({ taskId }: { taskId: string }) {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const input = useRef<HTMLInputElement>(null)
+
+  // «@» autocomplete: suggest teammates while the word after @ is being typed
+  const activeMembers = useMemo(() => Object.values(members).filter((m) => !m.archived && m.id !== me), [members, me])
+  const mentionQuery = text.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase()
+  const suggestions = mentionQuery === undefined ? [] : activeMembers.filter((m) => m.name.toLowerCase().split(' ').some((w) => w.startsWith(mentionQuery)))
+  const insertMention = (name: string) => setText(text.replace(/@([^\s@]*)$/, `@${name.split(' ')[0]} `))
 
   const send = async () => {
     if (!text.trim() && !files.length) return
@@ -67,7 +92,7 @@ export function Comments({ taskId }: { taskId: string }) {
             </div>
             {c.text && (
               <p className="comment-text">
-                <Linkify text={c.text} />
+                <Linkify text={c.text} mentions />
               </p>
             )}
             <InlineFiles ownerType="comment" ownerId={c.id} />
@@ -75,10 +100,20 @@ export function Comments({ taskId }: { taskId: string }) {
         </div>
       ))}
       <div className="composer">
+        {suggestions.length > 0 && (
+          <div className="mention-suggest">
+            {suggestions.map((m) => (
+              <button key={m.id} type="button" className="quick-chip" onMouseDown={(e) => e.preventDefault()} onClick={() => insertMention(m.name)}>
+                <Avatar member={m} size={18} />
+                {m.name}
+              </button>
+            ))}
+          </div>
+        )}
         <AutoText
           value={text}
           onChange={setText}
-          placeholder="Коментар…"
+          placeholder="Коментар… @імʼя — щоб покликати"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send()
           }}
@@ -142,6 +177,10 @@ export function describeActivity(a: Activity, members: Record<string, Member>, p
       return `виконав(-ла)${t || ' завдання'}`
     case 'cancelled':
       return `скасував(-ла)${t || ' завдання'}`
+    case 'started':
+      return `взяв(-ла) в роботу${t || ' завдання'}`
+    case 'mentioned':
+      return `згадав(-ла) ${name(m.to)} у${t || ' завданні'}`
     case 'reopened':
       return `повернув(-ла) в роботу${t}`
     case 'assigned':

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../lib/store'
 import { go, openTask } from '../lib/router'
 import { useLiveTasks, useMembers, usePersistedValue, useProjects } from '../lib/hooks'
-import { addDays, iso, isOverdue, plural, shortDate, timeAgo, todayIso, weekStart, WEEKDAYS_SHORT, weekday } from '../lib/dates'
+import { addDays, iso, isOverdue, plural, shortDate, timeAgo, todayIso, weekStart, WEEKDAYS_SHORT, weekday, isActive } from '../lib/dates'
 import { dayOf } from '../lib/filters'
 import { describeActivity } from '../components/Comments'
 import { Avatar, Segmented } from '../components/ui'
@@ -70,7 +70,7 @@ export function StatsView() {
             }
             if (t.status === 'cancelled') cancelled++
           }
-          if (t.assigneeId === m.id && t.status === 'open') {
+          if (t.assigneeId === m.id && isActive(t)) {
             open++
             if (isOverdue(t, today)) overdue++
           }
@@ -103,7 +103,7 @@ export function StatsView() {
         <p className="head-sub">
           <span>{totals.created} поставлено</span>
           {totals.withDeadline > 0 && <span>{Math.round((totals.onTime / totals.withDeadline) * 100)}% вчасно</span>}
-          <span>{tasks.filter((t) => t.status === 'open').length} відкрито зараз</span>
+          <span>{tasks.filter((t) => isActive(t)).length} відкрито зараз</span>
           <span className={tasks.some((t) => isOverdue(t, today)) ? 'is-alert' : ''}>{tasks.filter((t) => isOverdue(t, today)).length} прострочено</span>
         </p>
       </header>
@@ -371,7 +371,7 @@ function ColumnChart({ tasks, members, from, to, metric, weekly }: { tasks: Task
 function Workload({ tasks, members, today }: { tasks: Task[]; members: Member[]; today: string }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(today, i))
   const grid = members.map((m) => {
-    const counts = days.map((d) => tasks.filter((t) => t.assigneeId === m.id && t.status === 'open' && (dayOf(t) === d || (t.due === d && dayOf(t) !== d))).length)
+    const counts = days.map((d) => tasks.filter((t) => t.assigneeId === m.id && isActive(t) && (dayOf(t) === d || (t.due === d && dayOf(t) !== d))).length)
     const overdue = tasks.filter((t) => t.assigneeId === m.id && isOverdue(t, today)).length
     return { m, counts, overdue }
   })

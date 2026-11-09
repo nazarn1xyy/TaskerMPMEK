@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Plus } from 'lucide-react'
-import { addMembers, signIn, updateMember, uploadFiles, useStore } from '../lib/store'
+import { addMembers, signIn, toast, updateMember, updateTasks, uploadFiles, useStore } from '../lib/store'
 import { go } from '../lib/router'
 import { applyFilters, buildSections, emptyFilters, type Filters, type GroupBy } from '../lib/filters'
 import { useLiveTasks, useMembers, usePersisted, usePersistedValue, useProjects } from '../lib/hooks'
-import { addDays, isOverdue, plural, todayIso, weekStart } from '../lib/dates'
+import { addDays, isOverdue, plural, todayIso, weekStart, isActive } from '../lib/dates'
 import { TaskSections } from '../components/TaskList'
 import { FilterBar } from '../components/FilterBar'
 import { ask } from '../components/Dialog'
-import { AutoText, Avatar, Segmented } from '../components/ui'
+import { AutoText, Avatar, Menu, PopButton, Segmented } from '../components/ui'
 import type { Task } from '../lib/types'
 
 export function memberStats(tasks: Task[], id: string, today = todayIso()) {
@@ -18,7 +18,7 @@ export function memberStats(tasks: Task[], id: string, today = todayIso()) {
   let doneWeek = 0
   let created = 0
   for (const t of tasks) {
-    if (t.assigneeId === id && t.status === 'open') open++
+    if (t.assigneeId === id && isActive(t)) open++
     if (t.assigneeId === id && isOverdue(t, today)) overdue++
     if (t.completedBy === id && t.status === 'done' && t.completedAt && new Date(t.completedAt) >= new Date(`${ws}T00:00`)) doneWeek++
     if (t.createdBy === id) created++
@@ -110,7 +110,7 @@ export function MemberView({ id }: { id: string }) {
 
   const sections = useMemo(() => {
     let list: Task[]
-    if (tab === 'assigned') list = tasks.filter((t) => t.assigneeId === id && t.status === 'open')
+    if (tab === 'assigned') list = tasks.filter((t) => t.assigneeId === id && isActive(t))
     else if (tab === 'created') list = tasks.filter((t) => t.createdBy === id)
     else list = tasks.filter((t) => t.completedBy === id && t.status === 'done' && (t.completedAt ?? 0) > Date.now() - 30 * 86400000)
     const visible = applyFilters(list, filters, null)
@@ -120,6 +120,7 @@ export function MemberView({ id }: { id: string }) {
 
   if (!member) return <div className="page"><h1 className="display">Немає учасника</h1></div>
   const s = memberStats(tasks, id, today)
+  const openCount = s.open
   const lastWeek = tasks.filter((t) => t.completedBy === id && t.status === 'done' && (t.completedAt ?? 0) >= new Date(`${addDays(weekStart(today), -7)}T00:00`).getTime() && (t.completedAt ?? 0) < new Date(`${weekStart(today)}T00:00`).getTime()).length
 
   return (
@@ -177,6 +178,31 @@ export function MemberView({ id }: { id: string }) {
             { value: 'done', label: 'Виконано за 30 днів' },
           ]}
         />
+        {openCount > 0 && (
+          <PopButton className="link-btn" label={`Передати ${openCount} ${plural(openCount, ['завдання', 'завдання', 'завдань'])}…`} title="Наприклад, на час відпустки">
+            {(close) => (
+              <Menu
+                onDone={close}
+                items={[
+                  { key: 'h', label: 'Кому передати відкриті завдання', header: true },
+                  ...members
+                    .filter((m) => m.id !== id)
+                    .map((m) => ({
+                      key: m.id,
+                      label: m.name,
+                      icon: <Avatar member={m} size={18} />,
+                      onSelect: async () => {
+                        const list = tasks.filter((t) => t.assigneeId === id && isActive(t))
+                        if (!(await ask({ title: `Передати ${list.length} ${plural(list.length, ['завдання', 'завдання', 'завдань'])}?`, text: `${member.name} → ${m.name}. Переходять усі відкриті завдання й ті, що в роботі. Виконані залишаються в історії.`, ok: 'Передати' }))) return
+                        updateTasks(list.map((t) => ({ id: t.id, patch: { assigneeId: m.id } })))
+                        toast(`Передано ${list.length} ${plural(list.length, ['завдання', 'завдання', 'завдань'])} → ${m.name}`, { label: 'Повернути', run: () => updateTasks(list.map((t) => ({ id: t.id, patch: { assigneeId: id } }))) })
+                      },
+                    })),
+                ]}
+              />
+            )}
+          </PopButton>
+        )}
         {id !== me && (
           <button
             type="button"

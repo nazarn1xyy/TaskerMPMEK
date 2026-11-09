@@ -1,11 +1,12 @@
 import { memo, useCallback, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from 'react'
-import { ListChecks, MessageSquare, MoreHorizontal, Paperclip, Plus, Repeat } from 'lucide-react'
+import { Link2, ListChecks, MessageSquare, MoreHorizontal, Paperclip, Plus, Repeat } from 'lucide-react'
 import { addTask, duplicateTask, removeTask, setStatus, updateTask, useStore } from '../lib/store'
 import { openTask, useLocation } from '../lib/router'
 import { drag, useTaskDrop } from '../lib/dnd'
-import { addDays, isOverdue, relDay, relMonth, relWeek, todayIso, weekStart } from '../lib/dates'
+import { addDays, isOverdue, relDay, relMonth, relWeek, todayIso, weekStart, isActive } from '../lib/dates'
 import { rescheduleTo, type Section } from '../lib/filters'
 import { parseQuickAdd } from '../lib/parse'
+import { createFromList } from '../lib/pasteList'
 import { haptic, isTouch, useMembers, useProjects, useTaskCounters } from '../lib/hooks'
 import type { Member, Status, Task } from '../lib/types'
 import { Avatar, Menu, Popover, type MenuItem } from './ui'
@@ -29,7 +30,7 @@ export function TaskSections({ sections, options = {} }: { sections: Section[]; 
 }
 
 function orderAt(list: Task[], index: number) {
-  const open = list.filter((t) => t.status === 'open')
+  const open = list.filter((t) => isActive(t))
   const i = Math.min(index, open.length)
   const prev = open[i - 1]
   const next = open[i]
@@ -77,7 +78,7 @@ const SectionBlock = memo(function SectionBlock({ section, options, openId }: { 
     <section className={`section${over ? ' is-over' : ''}${section.tone ? ` tone-${section.tone}` : ''}`} {...props} onDragOver={onDragOver} onDragLeave={(e) => { props.onDragLeave(); if (!e.currentTarget.contains(e.relatedTarget as Node)) setMark(null) }}>
       <header className="section-head">
         <h3 className="section-label">{section.label}</h3>
-        <span className="section-count">{section.tasks.filter((t) => t.status === 'open').length || ''}</span>
+        <span className="section-count">{section.tasks.filter((t) => isActive(t)).length || ''}</span>
         {section.sub && <span className="section-sub">{section.sub}</span>}
       </header>
       <div className="section-body" ref={bodyRef}>
@@ -140,7 +141,7 @@ export const CheckButton = memo(function CheckButton({ task, size = 18 }: { task
       aria-pressed={task.status === 'done'}
       onClick={(e) => {
         e.stopPropagation()
-        setStatus(task.id, task.status === 'open' ? 'done' : 'open')
+        setStatus(task.id, isActive(task) ? 'done' : 'open')
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
@@ -148,6 +149,7 @@ export const CheckButton = memo(function CheckButton({ task, size = 18 }: { task
         <circle cx="10" cy="10" r="8.25" />
         {task.status === 'done' && <path d="M6.2 10.4l2.5 2.5 5.1-5.6" />}
         {task.status === 'cancelled' && <path d="M5.5 14.5l9-9" />}
+        {task.status === 'progress' && <path className="half" d="M10 1.75a8.25 8.25 0 0 1 0 16.5z" />}
       </svg>
     </button>
   )
@@ -155,7 +157,7 @@ export const CheckButton = memo(function CheckButton({ task, size = 18 }: { task
 
 export function statusMenu(task: Task, extra = true): MenuItem[] {
   const status = (s: Status, label: string, hint?: string): MenuItem => ({ key: s, label, hint, checked: task.status === s, onSelect: () => setStatus(task.id, s) })
-  const items = [status('open', 'Не виконано'), status('done', 'Виконано', 'X'), status('cancelled', 'Скасовано')]
+  const items = [status('open', 'Не виконано'), status('progress', 'В роботі'), status('done', 'Виконано', 'X'), status('cancelled', 'Скасовано')]
   if (!extra) return items
   return [
     { key: 'h-status', label: 'Статус', header: true },
@@ -298,6 +300,12 @@ export const TaskRow = memo(function TaskRow({ task, selected, dayCtx, bandCtx, 
               {task.steps.done}/{task.steps.total} кр.
             </span>
           )}
+          {(task.links?.length ?? 0) > 0 && (
+            <span className="meta-item" title="Посилання">
+              <Link2 size={13} strokeWidth={1.6} />
+              {task.links!.length}
+            </span>
+          )}
           {files > 0 && (
             <span className="meta-item" title="Файли">
               <Paperclip size={13} strokeWidth={1.6} />
@@ -308,6 +316,11 @@ export const TaskRow = memo(function TaskRow({ task, selected, dayCtx, bandCtx, 
             <span className="meta-item" title="Коментарі">
               <MessageSquare size={13} strokeWidth={1.6} />
               {notes}
+            </span>
+          )}
+          {(task.moves ?? 0) >= 3 && isActive(task) && (
+            <span className="meta-item is-alert" title={`Переносили ${task.moves} рази`}>
+              перенесено ×{task.moves}
             </span>
           )}
           {task.repeat !== 'none' && (
@@ -384,6 +397,13 @@ export function AddRow({ defaults, placeholder = 'Додати завдання'
           value={text}
           placeholder="Наприклад: дзвінок клієнту завтра о 11:00 @імʼя #проєкт !!"
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            // several lines pasted from notes or a chat → several tasks
+            if (createFromList(e.clipboardData.getData('text'), defaults, { members, projects, me })) {
+              e.preventDefault()
+              setText('')
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit()
             if (e.key === 'Escape') {

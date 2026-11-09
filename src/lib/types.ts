@@ -1,4 +1,4 @@
-export type Status = 'open' | 'done' | 'cancelled'
+export type Status = 'open' | 'progress' | 'done' | 'cancelled'
 export type Scope = 'none' | 'day' | 'week' | 'month'
 export type Repeat = 'none' | 'daily' | 'weekdays' | 'weekly' | 'monthly'
 export type Priority = 0 | 1 | 2 | 3
@@ -22,6 +22,24 @@ export interface Project {
   order: number
   createdAt: number
   updatedAt: number
+  health?: ProjectHealth | null
+  healthNote?: string
+  /** Long-form agreements, links, decisions. */
+  notes?: string
+  sections?: ProjectSection[]
+}
+
+export type ProjectHealth = 'on' | 'risk' | 'late'
+
+export interface ProjectSection {
+  id: string
+  name: string
+}
+
+export interface TaskLink {
+  id: string
+  url: string
+  title: string
 }
 
 export interface CheckItem {
@@ -29,6 +47,7 @@ export interface CheckItem {
   text: string
   done: boolean
   level: 0 | 1
+  assigneeId?: string | null
 }
 
 export interface Steps {
@@ -60,6 +79,10 @@ export interface Task {
   steps: Steps | null
   order: number
   deletedAt: number | null
+  sectionId?: string | null
+  links?: TaskLink[]
+  /** How many times a dated task was moved to another date (server-maintained). */
+  moves?: number
   createdAt: number
   updatedAt: number
 }
@@ -98,6 +121,8 @@ export type ActivityKind =
   | 'completed'
   | 'cancelled'
   | 'reopened'
+  | 'started'
+  | 'mentioned'
   | 'assigned'
   | 'moved'
   | 'renamed'

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Copy, Link2, Minus, MoreHorizontal, Plus, Trash2, X } from 'lucide-react'
 import { addProject, duplicateTask, removeTask, setStatus, updateTask, uploadFiles, useStore, toast } from '../lib/store'
 import { openTask } from '../lib/router'
-import { iso, isOverdue, longDate, timeAgo, todayIso } from '../lib/dates'
+import { iso, isOverdue, longDate, timeAgo, todayIso, isActive } from '../lib/dates'
 import { useMembers, useProjects } from '../lib/hooks'
 import type { Priority, Repeat, Status, Task } from '../lib/types'
 import { AutoText, Avatar, Menu, PopButton, Segmented } from './ui'
@@ -195,13 +195,14 @@ function DrawerBody({ task, onClose }: { task: Task; onClose: () => void }) {
           onChange={(s) => setStatus(task.id, s)}
           options={[
             { value: 'open', label: 'Не виконано' },
+            { value: 'progress', label: 'В роботі' },
             { value: 'done', label: 'Виконано' },
             { value: 'cancelled', label: 'Скасовано' },
           ]}
         />
 
         <AutoText
-          className={`drawer-title${task.status !== 'open' ? ' is-closed' : ''}`}
+          className={`drawer-title${!isActive(task) ? ' is-closed' : ''}`}
           value={title}
           placeholder="Назва завдання"
           onFocus={() => (editing.current = 'title')}
@@ -264,9 +265,28 @@ function DrawerBody({ task, onClose }: { task: Task; onClose: () => void }) {
           <dt>Проєкт</dt>
           <dd>
             <PopButton className="prop-btn" label={project ? project.name : <span className="muted">Без проєкту</span>}>
-              {(close) => <ProjectPicker value={task.projectId} onPick={(projectId) => (patch({ projectId }), close())} />}
+              {(close) => <ProjectPicker value={task.projectId} onPick={(projectId) => (patch({ projectId, sectionId: null }), close())} />}
             </PopButton>
           </dd>
+
+          {project && (project.sections?.length ?? 0) > 0 && (
+            <>
+              <dt>Розділ</dt>
+              <dd>
+                <PopButton className="prop-btn" label={project.sections!.find((x) => x.id === task.sectionId)?.name ?? <span className="muted">Без розділу</span>}>
+                  {(close) => (
+                    <Menu
+                      onDone={close}
+                      items={[
+                        ...project.sections!.map((x) => ({ key: x.id, label: x.name, checked: task.sectionId === x.id, onSelect: () => patch({ sectionId: x.id }) })),
+                        { key: 'none', label: 'Без розділу', checked: !task.sectionId, onSelect: () => patch({ sectionId: null }) },
+                      ]}
+                    />
+                  )}
+                </PopButton>
+              </dd>
+            </>
+          )}
 
           <dt>Пріоритет</dt>
           <dd>
@@ -336,6 +356,9 @@ function DrawerBody({ task, onClose }: { task: Task; onClose: () => void }) {
 
         <h4 className="drawer-h">Файли</h4>
         <Files ownerType="task" ownerId={task.id} />
+
+        <h4 className="drawer-h">Посилання</h4>
+        <TaskLinks task={task} />
 
         <div className="drawer-tabs">
           <button type="button" aria-selected={tab === 'comments'} onClick={() => setTab('comments')}>
@@ -464,6 +487,46 @@ export function ProjectPicker({ value, onPick }: { value: string | null; onPick:
             if (e.key === 'Enter' && name.trim()) onPick(addProject(name).id)
           }}
         />
+      </div>
+    </div>
+  )
+}
+
+function TaskLinks({ task }: { task: Task }) {
+  const links = task.links ?? []
+  const [url, setUrl] = useState('')
+  const add = () => {
+    let u = url.trim()
+    if (!u) return
+    if (!/^https?:\/\//i.test(u)) u = `https://${u}`
+    let title = u
+    try {
+      title = new URL(u).hostname.replace(/^www\./, '')
+    } catch {
+      return toast('Це не схоже на посилання', undefined, 'error')
+    }
+    updateTask(task.id, { links: [...links, { id: crypto.randomUUID().slice(0, 8), url: u, title }] })
+    setUrl('')
+  }
+  return (
+    <div className="links">
+      {links.map((l) => (
+        <div key={l.id} className="file-row">
+          <Link2 size={15} strokeWidth={1.5} />
+          <a className="file-name" href={l.url} target="_blank" rel="noreferrer">
+            {l.url.replace(/^https?:\/\/(www\.)?/, '')}
+          </a>
+          <span className="file-meta">{l.title}</span>
+          <button type="button" className="icon-btn" aria-label="Прибрати посилання" onClick={() => updateTask(task.id, { links: links.filter((x) => x.id !== l.id) })}>
+            <X size={15} strokeWidth={1.6} />
+          </button>
+        </div>
+      ))}
+      <div className="add-input link-input">
+        <Link2 size={15} strokeWidth={1.6} />
+        <div className="add-field">
+          <input value={url} inputMode="url" placeholder="Вставте посилання й Enter" onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} onBlur={() => url.trim() && add()} />
+        </div>
       </div>
     </div>
   )

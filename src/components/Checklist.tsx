@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { GripVertical, Plus, X } from 'lucide-react'
+import { GripVertical, Plus, UserPlus, X } from 'lucide-react'
 import { uid } from '../lib/store'
 import type { CheckItem } from '../lib/types'
+import { useMembers } from '../lib/hooks'
+import { Avatar, Menu, PopButton } from './ui'
 
 /** Пункти й підпункти. Tab — зробити підпунктом, Shift+Tab — повернути, Enter — новий пункт. */
 export function Checklist({ items: external, onChange }: { items: CheckItem[]; onChange: (items: CheckItem[]) => void }) {
   const [items, setItems] = useState(external)
+  const members = useMembers()
   const root = useRef<HTMLDivElement>(null)
   const focusId = useRef<string | null>(null)
   const timer = useRef<number | undefined>(undefined)
@@ -166,6 +169,23 @@ export function Checklist({ items: external, onChange }: { items: CheckItem[]; o
               if (JSON.stringify(items) !== JSON.stringify(external)) onChange(items)
             }}
           />
+          <PopButton
+            className={`cl-who${it.assigneeId ? ' is-set' : ''}`}
+            title={it.assigneeId ? `Виконує: ${members.find((m) => m.id === it.assigneeId)?.name ?? '—'}` : 'Призначити пункт'}
+            placement="bottom-end"
+            label={it.assigneeId ? <Avatar member={members.find((m) => m.id === it.assigneeId)} size={20} /> : <UserPlus size={15} strokeWidth={1.6} />}
+          >
+            {(close) => (
+              <Menu
+                onDone={close}
+                items={[
+                  { key: 'h', label: 'Хто виконує пункт', header: true },
+                  ...members.map((m) => ({ key: m.id, label: m.name, icon: <Avatar member={m} size={18} />, checked: it.assigneeId === m.id, onSelect: () => commit(items.map((x, j) => (j === i ? { ...x, assigneeId: m.id } : x)), true) })),
+                  { key: 'none', label: 'Нікому', checked: !it.assigneeId, onSelect: () => commit(items.map((x, j) => (j === i ? { ...x, assigneeId: null } : x)), true) },
+                ]}
+              />
+            )}
+          </PopButton>
           <button type="button" className="icon-btn cl-del" aria-label="Видалити пункт" onClick={() => commit(items.filter((_, j) => j !== i), true)}>
             <X size={14} strokeWidth={1.6} />
           </button>

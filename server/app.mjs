@@ -16,7 +16,7 @@ const PRESENCE_WINDOW = 30_000
 // Field whitelist + defaults per collection. Anything else in a payload is dropped.
 const SCHEMA = {
   members: { name: '', avatarId: null, archived: false, order: 0 },
-  projects: { name: '', description: '', ownerId: null, archived: false, order: 0 },
+  projects: { name: '', description: '', ownerId: null, archived: false, order: 0, health: null, healthNote: '', notes: '', sections: [] },
   tasks: {
     title: '',
     notes: '',
@@ -37,6 +37,9 @@ const SCHEMA = {
     steps: null,
     order: 0,
     deletedAt: null,
+    sectionId: null,
+    links: [],
+    moves: 0,
   },
   comments: { taskId: null, authorId: null, text: '' },
 }
@@ -88,7 +91,7 @@ export function createApp({ store, realtime, files }) {
       }
       if (!before.deletedAt && after.deletedAt) push('deleted', ref)
       if (before.deletedAt && !after.deletedAt) push('restored', ref)
-      if (before.status !== after.status) push(after.status === 'done' ? 'completed' : after.status === 'cancelled' ? 'cancelled' : 'reopened', ref)
+      if (before.status !== after.status) push(after.status === 'done' ? 'completed' : after.status === 'cancelled' ? 'cancelled' : after.status === 'progress' ? 'started' : 'reopened', ref)
       if (before.assigneeId !== after.assigneeId) push('assigned', { ...ref, meta: { from: before.assigneeId, to: after.assigneeId } })
       if (before.projectId !== after.projectId) push('moved', { ...ref, meta: { from: before.projectId, to: after.projectId } })
       if (before.title !== after.title) push('renamed', { ...ref, meta: { from: before.title } })
@@ -101,6 +104,16 @@ export function createApp({ store, realtime, files }) {
     if (col === 'comments' && !before) {
       const task = await store.get('tasks', after.taskId)
       push('commented', { taskId: after.taskId, title: task?.title, meta: { text: after.text.slice(0, 140) } })
+      // @mentions → one activity per mentioned member, clients turn these into notifications
+      const members = await store.all('members')
+      const norm = (s) => s.toLowerCase().replace(/[ʼ'’]/g, '')
+      const tokens = [...after.text.matchAll(/(?:^|\s)@([^\s@,.!?:;]+)/g)].map((m) => norm(m[1]))
+      const mentioned = new Set()
+      for (const tok of tokens) {
+        const who = members.find((m) => !m.archived && (norm(m.name).split(' ')[0] === tok || norm(m.name).replace(/\s+/g, '') === tok || norm(m.name).startsWith(tok)))
+        if (who && who.id !== actorId) mentioned.add(who.id)
+      }
+      for (const to of mentioned) push('mentioned', { taskId: after.taskId, title: task?.title, meta: { to, text: after.text.slice(0, 140) } })
     }
     return out
   }
@@ -154,8 +167,12 @@ export function createApp({ store, realtime, files }) {
 
     if (type === 'update') {
       const item = { ...pick(col, op.data, before), updatedAt: now }
+      // count real reschedules (a dated task moved to another date) for the weekly report
+      if (col === 'tasks' && (before.date || before.due) && (before.date !== item.date || before.due !== item.due) && (item.date || item.due)) {
+        item.moves = (before.moves ?? 0) + 1
+      }
       if (col === 'tasks' && before.status !== item.status) {
-        if (item.status === 'open') Object.assign(item, { completedAt: null, completedBy: null })
+        if (item.status === 'open' || item.status === 'progress') Object.assign(item, { completedAt: null, completedBy: null })
         else Object.assign(item, { completedAt: now, completedBy: actorId })
       }
       await store.put(col, item)

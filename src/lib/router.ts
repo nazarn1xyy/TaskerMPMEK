@@ -11,6 +11,7 @@ export type Route =
   | { name: 'team' }
   | { name: 'member'; id: string }
   | { name: 'stats' }
+  | { name: 'report'; date: string }
 
 export interface Location {
   route: Route
@@ -61,6 +62,9 @@ export function parseHash(hash: string): Location {
     case 'stats':
       route = { name: 'stats' }
       break
+    case 'report':
+      route = { name: 'report', date: weekStart(isDate(b) ? b : today) }
+      break
     default:
       route = { name: 'tasks', period: 'day', date: today }
   }
@@ -79,6 +83,8 @@ export function routePath(r: Route): string {
       return `/project/${r.id}`
     case 'member':
       return `/member/${r.id}`
+    case 'report':
+      return r.date === weekStart(todayIso()) ? '/report' : `/report/${r.date}`
     default:
       return `/${r.name}`
   }

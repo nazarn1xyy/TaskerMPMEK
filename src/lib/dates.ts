@@ -150,8 +150,11 @@ export function taskEnd(t: Task): string | null {
   return taskSpan(t)?.[1] ?? null
 }
 
+/** Not finished yet: «не виконано» or «в роботі». */
+export const isActive = (t: Pick<Task, 'status'>) => t.status === 'open' || t.status === 'progress'
+
 export function isOverdue(t: Task, today = todayIso()) {
-  if (t.status !== 'open') return false
+  if (!isActive(t)) return false
   const end = taskEnd(t)
   if (!end) return false
   if (end < today) return true

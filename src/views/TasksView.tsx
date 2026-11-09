@@ -4,7 +4,7 @@ import { useStore } from '../lib/store'
 import { go, type Period } from '../lib/router'
 import { applyFilters, buildSections, emptyFilters, periodTitle, shiftPeriod, tasksInPeriod, type Filters, type GroupBy } from '../lib/filters'
 import { useHotkeys, useLiveTasks, useMembers, useNow, usePersisted, usePersistedValue, useProjects } from '../lib/hooks'
-import { isOverdue, monthStart, plural, todayIso, weekStart } from '../lib/dates'
+import { isOverdue, monthStart, plural, todayIso, weekStart, isActive } from '../lib/dates'
 import { TaskSections } from '../components/TaskList'
 import { FilterBar, WhoTabs } from '../components/FilterBar'
 import { Segmented } from '../components/ui'
@@ -41,7 +41,7 @@ export function TasksView({ period, date }: { period: Period; date: string }) {
   }, [visible, groupBy, period, date, members, projects, today, whoId, me])
 
   const { title, sub } = periodTitle(period, date, today)
-  const open = visible.filter((t) => t.status === 'open').length
+  const open = visible.filter((t) => isActive(t)).length
   const overdue = visible.filter((t) => isOverdue(t, today)).length
   const done = visible.filter((t) => t.status === 'done').length
 

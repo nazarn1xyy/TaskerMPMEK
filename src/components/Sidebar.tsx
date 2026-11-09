@@ -4,7 +4,7 @@ import { signIn, updateTask, useStore } from '../lib/store'
 import { go, type Route } from '../lib/router'
 import { useTaskDrop } from '../lib/dnd'
 import { useLiveTasks, useMembers, useProjects } from '../lib/hooks'
-import { isOverdue, monthStart, todayIso, weekStart } from '../lib/dates'
+import { isOverdue, monthStart, todayIso, weekStart, isActive } from '../lib/dates'
 import { dayOf } from '../lib/filters'
 import { Avatar, Kbd, Menu, PopButton } from './ui'
 
@@ -71,7 +71,7 @@ export function useTodayCount() {
     let count = 0
     let overdue = 0
     for (const t of tasks) {
-      if (t.status !== 'open' || t.assigneeId !== me) continue
+      if (!isActive(t) || t.assigneeId !== me) continue
       if (isOverdue(t, today)) overdue++
       else if (dayOf(t) === today || t.due === today) count++
     }
@@ -95,7 +95,7 @@ export function Sidebar({ route, onPalette, onNew, onNavigate }: { route: Route;
     const perMember = new Map<string, number>()
     const perProject = new Map<string, number>()
     for (const t of tasks) {
-      if (t.status !== 'open') continue
+      if (!isActive(t)) continue
       if (t.assigneeId) perMember.set(t.assigneeId, (perMember.get(t.assigneeId) ?? 0) + 1)
       if (t.projectId) perProject.set(t.projectId, (perProject.get(t.projectId) ?? 0) + 1)
       if (t.assigneeId !== me) continue
@@ -143,6 +143,9 @@ export function Sidebar({ route, onPalette, onNew, onNavigate }: { route: Route;
         </NavItem>
         <NavItem active={is('stats')} onClick={() => nav({ name: 'stats' })} hotkey="6">
           Статистика
+        </NavItem>
+        <NavItem active={is('report')} onClick={() => nav({ name: 'report', date: weekStart(today) })} hotkey="7">
+          Звіт тижня
         </NavItem>
       </nav>
 

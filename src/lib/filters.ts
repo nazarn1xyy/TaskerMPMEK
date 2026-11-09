@@ -1,4 +1,4 @@
-import type { Member, Project, Status, Task } from './types'
+import type { Member, Project, ProjectSection, Status, Task } from './types'
 import type { Period } from './router'
 import {
   addDays,
@@ -18,6 +18,7 @@ import {
   MONTHS,
   weekStart,
   shortDate,
+  isActive,
 } from './dates'
 
 export interface Filters {
@@ -40,8 +41,10 @@ export function applyFilters(tasks: Task[], f: Filters, who: string | null) {
   const q = norm(f.q.trim())
   return tasks.filter((t) => {
     if (t.deletedAt) return false
-    if (who && t.assigneeId !== who) return false
-    if (f.status.length && !f.status.includes(t.status)) return false
+    // a checklist item assigned to someone also puts the task on their list
+    if (who && t.assigneeId !== who && !t.checklist.some((c) => c.assigneeId === who && !c.done)) return false
+    // «не виконані» also covers tasks already in progress
+    if (f.status.length && !f.status.includes(t.status) && !(t.status === 'progress' && f.status.includes('open'))) return false
     if (f.projects.length && !f.projects.includes(t.projectId ?? 'none')) return false
     if (f.priority.length && !f.priority.includes(t.priority)) return false
     if (f.tags.length && !f.tags.some((tag) => t.tags.includes(tag))) return false
@@ -52,11 +55,11 @@ export function applyFilters(tasks: Task[], f: Filters, who: string | null) {
 }
 
 export function sortTasks(list: Task[]) {
-  const rank = (t: Task) => (t.status === 'open' ? 0 : 1)
+  const rank = (t: Task) => (isActive(t) ? 0 : 1)
   return list.sort((a, b) => rank(a) - rank(b) || (rank(a) ? (b.completedAt ?? 0) - (a.completedAt ?? 0) : a.order - b.order))
 }
 
-export type GroupBy = 'date' | 'project' | 'person' | 'status' | 'none'
+export type GroupBy = 'date' | 'project' | 'person' | 'status' | 'section' | 'none'
 
 export interface Section {
   key: string
@@ -103,11 +106,11 @@ export function tasksInPeriod(tasks: Task[], period: Period, date: string, today
   if (!range) return tasks
   const [start, end] = range
   const containsToday = start <= today && today <= end
-  return tasks.filter((t) => overlaps(t, start, end) || (containsToday && t.status === 'open' && isOverdue(t, today) && (taskEnd(t) ?? '') < start))
+  return tasks.filter((t) => overlaps(t, start, end) || (containsToday && isActive(t) && isOverdue(t, today) && (taskEnd(t) ?? '') < start))
 }
 
 function overdueSection(tasks: Task[], start: string, today: string): Section | null {
-  const list = tasks.filter((t) => t.status === 'open' && isOverdue(t, today) && (taskEnd(t) ?? '') < start)
+  const list = tasks.filter((t) => isActive(t) && isOverdue(t, today) && (taskEnd(t) ?? '') < start)
   if (!list.length) return null
   return { key: 'overdue', label: 'Прострочено', tasks: sortTasks(list), tone: 'alert' }
 }
@@ -232,10 +235,20 @@ function byDate(tasks: Task[], period: Period, date: string, today: string): Sec
 export function buildSections(
   tasks: Task[],
   groupBy: GroupBy,
-  ctx: { period: Period; date: string; members: Member[]; projects: Project[]; today?: string },
+  ctx: { period: Period; date: string; members: Member[]; projects: Project[]; today?: string; sections?: ProjectSection[] },
 ): Section[] {
   const today = ctx.today ?? todayIso()
   if (groupBy === 'date') return byDate(tasks, ctx.period, ctx.date, today)
+
+  // project sections («Дизайн», «Друк»…); tasks without one go to «Без розділу»
+  if (groupBy === 'section') {
+    const list = ctx.sections ?? []
+    const known = new Set(list.map((x) => x.id))
+    const out: Section[] = list.map((x) => ({ key: x.id, label: x.name, tasks: sortTasks(tasks.filter((t) => t.sectionId === x.id)), drop: { sectionId: x.id }, create: { sectionId: x.id }, keep: true }))
+    const rest = tasks.filter((t) => !t.sectionId || !known.has(t.sectionId))
+    if (rest.length || !list.length) out.unshift({ key: 'no-section', label: 'Без розділу', tasks: sortTasks(rest), drop: { sectionId: null }, create: { sectionId: null }, keep: !list.length })
+    return out
+  }
 
   const base: Partial<Task> = ctx.period === 'day' ? dayPatch(ctx.date) : ctx.period === 'week' ? weekPatch(ctx.date) : ctx.period === 'month' ? monthPatch(ctx.date) : {}
 
@@ -243,6 +256,7 @@ export function buildSections(
 
   if (groupBy === 'status') {
     const labels: [Status, string][] = [
+      ['progress', 'В роботі'],
       ['open', 'Не виконані'],
       ['done', 'Виконані'],
       ['cancelled', 'Скасовані'],

@@ -4,8 +4,9 @@ import { CornerDownLeft } from 'lucide-react'
 import { addTask, signIn, toast, useStore } from '../lib/store'
 import { go, openTask, type Route } from '../lib/router'
 import { parseQuickAdd } from '../lib/parse'
+import { createFromList } from '../lib/pasteList'
 import { COMPACT, useLiveTasks, useMedia, useMembers, useProjects } from '../lib/hooks'
-import { addDays, monthStart, relDay, todayIso, weekStart } from '../lib/dates'
+import { addDays, monthStart, relDay, todayIso, weekStart, isActive } from '../lib/dates'
 import type { Task } from '../lib/types'
 import { toggleTheme } from './Sidebar'
 import { Avatar, Kbd } from './ui'
@@ -96,6 +97,7 @@ export function Palette({ mode, defaults, onClose }: { mode: 'search' | 'create'
       ['Календар', { name: 'calendar', mode: 'month', date: monthStart(today) }],
       ['Календар на тиждень', { name: 'calendar', mode: 'week', date: weekStart(today) }],
       ['Статистика', { name: 'stats' }],
+      ['Звіт тижня', { name: 'report', date: weekStart(today) }],
       ['Проєкти', { name: 'projects' }],
       ['Команда', { name: 'team' }],
       ['Змінити тему', toggleTheme],
@@ -110,13 +112,13 @@ export function Palette({ mode, defaults, onClose }: { mode: 'search' | 'create'
       for (const m of members) if (norm(m.name).includes(q)) out.push({ key: m.id, group: 'Люди', label: m.name, run: () => (go({ name: 'member', id: m.id }), onClose()) })
       const found = tasks
         .filter((t) => norm(t.title).includes(q) || norm(t.notes).includes(q))
-        .sort((a, b) => (a.status === 'open' ? 0 : 1) - (b.status === 'open' ? 0 : 1) || b.updatedAt - a.updatedAt)
+        .sort((a, b) => (isActive(a) ? 0 : 1) - (isActive(b) ? 0 : 1) || b.updatedAt - a.updatedAt)
         .slice(0, 8)
       for (const t of found)
         out.push({
           key: t.id,
           group: 'Завдання',
-          label: <span className={t.status !== 'open' ? 'is-closed' : ''}>{t.title}</span>,
+          label: <span className={!isActive(t) ? 'is-closed' : ''}>{t.title}</span>,
           hint: [t.assigneeId && members.find((m) => m.id === t.assigneeId)?.name, t.status === 'done' ? 'виконано' : t.status === 'cancelled' ? 'скасовано' : null].filter(Boolean).join(' · '),
           run: () => (openTask(t.id), onClose()),
         })
@@ -155,6 +157,12 @@ export function Palette({ mode, defaults, onClose }: { mode: 'search' | 'create'
           enterKeyHint={mode === 'create' ? 'done' : 'go'}
           autoComplete="off"
           onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            if (createFromList(e.clipboardData.getData('text'), { ...defaults, ...whenPatch, ...pick }, { members, projects, me })) {
+              e.preventDefault()
+              onClose()
+            }
+          }}
           onKeyDown={onKey}
         />
         {mode === 'create' && (

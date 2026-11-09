@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { api, connectEvents, setActor, type ChangePayload, type Op, type StatePayload } from './api'
 import type { Activity, Attachment, Collection, CollectionMap, Comment, Member, OwnerType, Project, Status, Task } from './types'
-import { addDays, addMonths, diffDays, todayIso, weekday } from './dates'
+import { addDays, addMonths, diffDays, todayIso, weekday, isActive } from './dates'
 
 type Table<T> = Record<string, T>
 
@@ -128,8 +128,8 @@ function connect() {
   }
   disconnect = connectEvents(get().me, {
     change: (p) => {
-      const before = applyChange(p, true)
-      notifyAssignments(p, before)
+      applyChange(p, true)
+      notifyFromActivity(p.activity)
     },
     presence: (presence) => set({ presence }),
     status: (online) => set({ online }),
@@ -166,37 +166,16 @@ function startPolling() {
   }
 }
 
+/** Someone gave me a task or mentioned me → a quiet toast with a way to open it. */
 function notifyFromActivity(entries: Activity[]) {
   const me = get().me
   if (!me) return
   for (const a of entries) {
     if (!a.taskId || !a.actorId || a.actorId === me) continue
-    const toMe = (a.kind === 'created' && a.meta?.assigneeId === me) || (a.kind === 'assigned' && a.meta?.to === me)
-    if (!toMe) continue
-    const who = get().members[a.actorId]?.name ?? 'Хтось'
-    toast(`${who}: «${a.title ?? ''}» — тепер ваше завдання`, {
-      label: 'Відкрити',
-      run: () => window.dispatchEvent(new CustomEvent('tasker:open', { detail: a.taskId })),
-    })
-  }
-}
-
-/** Someone else gave me a task → a quiet toast with a way to open it. */
-function notifyAssignments(p: ChangePayload, before: State) {
-  const me = get().me
-  if (!me) return
-  for (const [col, raw] of p.put) {
-    if (col !== 'tasks') continue
-    const t = raw as unknown as Task
-    const prev = before.tasks[t.id]
-    if (t.assigneeId !== me || prev?.assigneeId === me || t.deletedAt) continue
-    const actor = p.activity.find((a) => a.taskId === t.id)?.actorId
-    if (!actor || actor === me) continue
-    const who = get().members[actor]?.name ?? 'Хтось'
-    toast(`${who}: «${t.title}» — тепер ваше завдання`, {
-      label: 'Відкрити',
-      run: () => window.dispatchEvent(new CustomEvent('tasker:open', { detail: t.id })),
-    })
+    const who = get().members[a.actorId]?.name.split(' ')[0] ?? 'Хтось'
+    const open = { label: 'Відкрити', run: () => window.dispatchEvent(new CustomEvent('tasker:open', { detail: a.taskId })) }
+    if ((a.kind === 'created' && a.meta?.assigneeId === me) || (a.kind === 'assigned' && a.meta?.to === me)) toast(`${who}: «${a.title ?? ''}» — тепер ваше завдання`, open)
+    else if (a.kind === 'mentioned' && a.meta?.to === me) toast(`${who} згадав(-ла) вас у «${a.title ?? ''}»`, open)
   }
 }
 
@@ -422,17 +401,17 @@ export function setStatus(id: string, status: Status) {
   if (!t || t.status === status) return
   const me = get().me
   const patch: Partial<Task> =
-    status === 'open' ? { status, completedAt: null, completedBy: null } : { status, completedAt: Date.now(), completedBy: me }
+    status === 'open' || status === 'progress' ? { status, completedAt: null, completedBy: null } : { status, completedAt: Date.now(), completedBy: me }
   const prev = { status: t.status, completedAt: t.completedAt, completedBy: t.completedBy }
   updateTask(id, patch)
 
   let spawned: Task | null = null
-  if (status === 'done' && t.status === 'open') {
+  if (status === 'done' && isActive(t)) {
     const next = nextOccurrence(t)
     const exists =
       next &&
       Object.values(get().tasks).some(
-        (x) => x.id !== t.id && !x.deletedAt && x.status === 'open' && x.title === t.title && x.repeat === t.repeat && x.date === next.date && x.due === next.due,
+        (x) => x.id !== t.id && !x.deletedAt && isActive(x) && x.title === t.title && x.repeat === t.repeat && x.date === next.date && x.due === next.due,
       )
     if (next && !exists) {
       spawned = addTask({

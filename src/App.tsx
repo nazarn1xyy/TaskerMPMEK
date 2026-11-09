@@ -16,6 +16,7 @@ import { Onboarding, Picker } from './views/Welcome'
 
 import { CalendarView } from './views/CalendarView'
 import { StatsView } from './views/StatsView'
+import { ReportView } from './views/ReportView'
 import { ProjectsView, ProjectView } from './views/ProjectsView'
 import { MemberView, TeamView } from './views/TeamView'
 
@@ -116,6 +117,7 @@ function Shell() {
     '4': () => go({ name: 'tasks', period: 'all', date: today }),
     '5': () => go({ name: 'calendar', mode: 'month', date: monthStart(today) }),
     '6': () => go({ name: 'stats' }),
+    '7': () => go({ name: 'report', date: weekStart(today) }),
     '?': () => setHelp((v) => !v),
     'mod+z': (e) => {
       if (isTyping(e.target)) return
@@ -174,6 +176,8 @@ function View({ route }: { route: Route }) {
       return <MemberView key={route.id} id={route.id} />
     case 'stats':
       return <StatsView />
+    case 'report':
+      return <ReportView key={route.date} date={route.date} />
   }
 }
 
@@ -270,6 +274,8 @@ function sectionTitle(route: Route, today: string) {
       return 'Команда'
     case 'stats':
       return 'Статистика'
+    case 'report':
+      return 'Звіт тижня'
   }
 }
 

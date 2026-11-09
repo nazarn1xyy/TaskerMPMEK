@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ArrowRight, Plus } from 'lucide-react'
 import { addMembers, signIn, useStore } from '../lib/store'
 import { useLiveTasks, useMembers } from '../lib/hooks'
-import { isOverdue, plural, todayIso } from '../lib/dates'
+import { isOverdue, plural, todayIso, isActive } from '../lib/dates'
 import { dayOf } from '../lib/filters'
 import { Avatar } from '../components/ui'
 
@@ -58,7 +58,7 @@ export function Picker() {
     for (const t of tasks) {
       const s = t.assigneeId ? map.get(t.assigneeId) : undefined
       if (!s) continue
-      if (t.status === 'open') {
+      if (isActive(t)) {
         s.open++
         if (isOverdue(t, today)) s.overdue++
         if (dayOf(t) === today || t.due === today) s.today++

@@ -7,8 +7,8 @@ import { useStore } from '../lib/store'
 import { Menu, PopButton, type MenuItem } from './ui'
 import { PRIORITY_LABEL } from './TaskDrawer'
 
-const STATUS_LABEL: Record<Status, string> = { open: 'Не виконані', done: 'Виконані', cancelled: 'Скасовані' }
-const GROUP_LABEL: Record<GroupBy, string> = { date: 'за термінами', project: 'за проєктами', person: 'за людьми', status: 'за статусом', none: 'без груп' }
+const STATUS_LABEL: Record<Status, string> = { open: 'Не виконані', progress: 'В роботі', done: 'Виконані', cancelled: 'Скасовані' }
+const GROUP_LABEL: Record<GroupBy, string> = { date: 'за термінами', project: 'за проєктами', person: 'за людьми', status: 'за статусом', section: 'за розділами', none: 'без груп' }
 
 function toggle<T>(list: T[], v: T) {
   return list.includes(v) ? list.filter((x) => x !== v) : [...list, v]
@@ -68,7 +68,7 @@ export function FilterBar({
               items={[
                 ...section(
                   'Статус',
-                  (['open', 'done', 'cancelled'] as Status[]).map((s) => ({ key: s, label: STATUS_LABEL[s], checked: filters.status.includes(s), onSelect: () => set({ status: toggle(filters.status, s) }) })),
+                  (['open', 'progress', 'done', 'cancelled'] as Status[]).map((s) => ({ key: s, label: STATUS_LABEL[s], checked: filters.status.includes(s), onSelect: () => set({ status: toggle(filters.status, s) }) })),
                 ),
                 ...section('Пріоритет', [3, 2, 1, 0].map((p) => ({ key: `p${p}`, label: PRIORITY_LABEL[p], checked: filters.priority.includes(p), onSelect: () => set({ priority: toggle(filters.priority, p) }) }))),
                 ...section('Проєкт', [
