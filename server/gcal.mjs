@@ -278,7 +278,14 @@ export function createGcal({ store, runOps, newId }) {
   // ---------- routes ----------
 
   function routes(app) {
-    const originOf = (c) => process.env.APP_URL?.replace(/\/$/, '') || new URL(c.req.url).origin
+    // behind Vercel's proxy the request URL can be plain http or an internal host; the forwarded headers carry the public one
+    const originOf = (c) => {
+      if (process.env.APP_URL) return process.env.APP_URL.replace(/\/$/, '')
+      const url = new URL(c.req.url)
+      const host = c.req.header('x-forwarded-host') || c.req.header('host') || url.host
+      const proto = c.req.header('x-forwarded-proto') || (host.startsWith('localhost') ? url.protocol.replace(':', '') : 'https')
+      return `${proto.split(',')[0]}://${host.split(',')[0]}`
+    }
     const redirectUri = (origin) => `${origin}/api/gcal/callback`
 
     app.get('/api/gcal/connect', (c) => {

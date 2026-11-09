@@ -243,7 +243,10 @@ export function createApp({ store, realtime, files }) {
 
   // remember the public address so calendar events can link back to the task
   app.use('/api/*', async (c, next) => {
-    if (!process.env.APP_URL) appUrl = new URL(c.req.url).origin
+    if (!process.env.APP_URL) {
+      const host = c.req.header('x-forwarded-host') || c.req.header('host')
+      appUrl = host ? `${(c.req.header('x-forwarded-proto') || 'https').split(',')[0]}://${host.split(',')[0]}` : new URL(c.req.url).origin
+    }
     await next()
   })
   gcal.routes(app)
